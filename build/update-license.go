@@ -1,19 +1,20 @@
-// Copyright 2018 The Elastos.ELA.SideChain.ESC Authors
-// This file is part of the Elastos.ELA.SideChain.ESC library.
+// Copyright 2018 The go-ethereum Authors
+// This file is part of the go-ethereum library.
 //
-// The Elastos.ELA.SideChain.ESC library is free software: you can redistribute it and/or modify
+// The go-ethereum library is free software: you can redistribute it and/or modify
 // it under the terms of the GNU Lesser General Public License as published by
 // the Free Software Foundation, either version 3 of the License, or
 // (at your option) any later version.
 //
-// The Elastos.ELA.SideChain.ESC library is distributed in the hope that it will be useful,
+// The go-ethereum library is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
 // MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
 // GNU Lesser General Public License for more details.
 //
 // You should have received a copy of the GNU Lesser General Public License
-// along with the Elastos.ELA.SideChain.ESC library. If not, see <http://www.gnu.org/licenses/>.
+// along with the go-ethereum library. If not, see <http://www.gnu.org/licenses/>.
 
+//go:build none
 // +build none
 
 /*
@@ -39,14 +40,13 @@ import (
 	"bufio"
 	"bytes"
 	"fmt"
-	"io/ioutil"
 	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
 	"runtime"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -64,17 +64,18 @@ var (
 		"vendor/", "tests/testdata/", "build/",
 
 		// don't relicense vendored sources
-		"cmd/internal/browser",
 		"common/bitutil/bitutil",
 		"common/prque/",
-		"consensus/ethash/xor.go",
+		"crypto/blake2b/",
 		"crypto/bn256/",
+		"crypto/bls12381/",
 		"crypto/ecies/",
 		"graphql/graphiql.go",
 		"internal/jsre/deps",
 		"log/",
 		"metrics/",
 		"signer/rules/deps",
+		"internal/reexec",
 
 		// skip special licenses
 		"crypto/secp256k1", // Relicensed to BSD-3 via https://github.com/elastos/Elastos.ELA.SideChain.ESC/pull/17225
@@ -88,13 +89,13 @@ var (
 	licenseCommentRE = regexp.MustCompile(`^//\s*(Copyright|This file is part of).*?\n(?://.*?\n)*\n*`)
 
 	// this text appears at the start of AUTHORS
-	authorsFileHeader = "# This is the official list of Elastos.ELA.SideChain.ESC authors for copyright purposes.\n\n"
+	authorsFileHeader = "# This is the official list of go-ethereum authors for copyright purposes.\n\n"
 )
 
 // this template generates the license comment.
 // its input is an info structure.
 var licenseT = template.Must(template.New("").Parse(`
-// Copyright {{.Year}} The Elastos.ELA.SideChain.ESC Authors
+// Copyright {{.Year}} The go-ethereum Authors
 // This file is part of {{.Whole false}}.
 //
 // {{.Whole true}} is free software: you can redistribute it and/or modify
@@ -133,12 +134,12 @@ func (i info) ShortLicense() string {
 
 func (i info) Whole(startOfSentence bool) string {
 	if i.gpl() {
-		return "Elastos.ELA.SideChain.ESC"
+		return "go-ethereum"
 	}
 	if startOfSentence {
-		return "The Elastos.ELA.SideChain.ESC library"
+		return "The go-ethereum library"
 	}
-	return "the Elastos.ELA.SideChain.ESC library"
+	return "the go-ethereum library"
 }
 
 func (i info) gpl() bool {
@@ -149,13 +150,6 @@ func (i info) gpl() bool {
 	}
 	return false
 }
-
-// authors implements the sort.Interface for strings in case-insensitive mode.
-type authors []string
-
-func (as authors) Len() int           { return len(as) }
-func (as authors) Less(i, j int) bool { return strings.ToLower(as[i]) < strings.ToLower(as[j]) }
-func (as authors) Swap(i, j int)      { as[i], as[j] = as[j], as[i] }
 
 func main() {
 	var (
@@ -241,7 +235,7 @@ func gitAuthors(files []string) []string {
 }
 
 func readAuthors() []string {
-	content, err := ioutil.ReadFile("AUTHORS")
+	content, err := os.ReadFile("AUTHORS")
 	if err != nil && !os.IsNotExist(err) {
 		log.Fatalln("error reading AUTHORS:", err)
 	}
@@ -297,7 +291,9 @@ func writeAuthors(files []string) {
 		}
 	}
 	// Write sorted list of authors back to the file.
-	sort.Sort(authors(list))
+	slices.SortFunc(list, func(a, b string) int {
+		return strings.Compare(strings.ToLower(a), strings.ToLower(b))
+	})
 	content := new(bytes.Buffer)
 	content.WriteString(authorsFileHeader)
 	for _, a := range list {
@@ -305,7 +301,7 @@ func writeAuthors(files []string) {
 		content.WriteString("\n")
 	}
 	fmt.Println("writing AUTHORS")
-	if err := ioutil.WriteFile("AUTHORS", content.Bytes(), 0644); err != nil {
+	if err := os.WriteFile("AUTHORS", content.Bytes(), 0644); err != nil {
 		log.Fatalln(err)
 	}
 }
@@ -340,7 +336,10 @@ func isGenerated(file string) bool {
 	}
 	defer fd.Close()
 	buf := make([]byte, 2048)
-	n, _ := fd.Read(buf)
+	n, err := fd.Read(buf)
+	if err != nil {
+		return false
+	}
 	buf = buf[:n]
 	for _, l := range bytes.Split(buf, []byte("\n")) {
 		if bytes.HasPrefix(l, []byte("// Code generated")) {
@@ -381,7 +380,7 @@ func writeLicense(info *info) {
 	if err != nil {
 		log.Fatalf("error stat'ing %s: %v\n", info.file, err)
 	}
-	content, err := ioutil.ReadFile(info.file)
+	content, err := os.ReadFile(info.file)
 	if err != nil {
 		log.Fatalf("error reading %s: %v\n", info.file, err)
 	}
@@ -400,7 +399,7 @@ func writeLicense(info *info) {
 		return
 	}
 	fmt.Println("writing", info.ShortLicense(), info.file)
-	if err := ioutil.WriteFile(info.file, buf.Bytes(), fi.Mode()); err != nil {
+	if err := os.WriteFile(info.file, buf.Bytes(), fi.Mode()); err != nil {
 		log.Fatalf("error writing %s: %v", info.file, err)
 	}
 }

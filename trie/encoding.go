@@ -1,18 +1,18 @@
-// Copyright 2014 The Elastos.ELA.SideChain.ESC Authors
-// This file is part of the Elastos.ELA.SideChain.ESC library.
+// Copyright 2014 The go-ethereum Authors
+// This file is part of the go-ethereum library.
 //
-// The Elastos.ELA.SideChain.ESC library is free software: you can redistribute it and/or modify
+// The go-ethereum library is free software: you can redistribute it and/or modify
 // it under the terms of the GNU Lesser General Public License as published by
 // the Free Software Foundation, either version 3 of the License, or
 // (at your option) any later version.
 //
-// The Elastos.ELA.SideChain.ESC library is distributed in the hope that it will be useful,
+// The go-ethereum library is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
 // MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
 // GNU Lesser General Public License for more details.
 //
 // You should have received a copy of the GNU Lesser General Public License
-// along with the Elastos.ELA.SideChain.ESC library. If not, see <http://www.gnu.org/licenses/>.
+// along with the go-ethereum library. If not, see <http://www.gnu.org/licenses/>.
 
 package trie
 
@@ -51,6 +51,34 @@ func hexToCompact(hex []byte) []byte {
 	return buf
 }
 
+// hexToCompactInPlace places the compact key in input buffer, returning the compacted key.
+func hexToCompactInPlace(hex []byte) []byte {
+	var (
+		hexLen    = len(hex) // length of the hex input
+		firstByte = byte(0)
+	)
+	// Check if we have a terminator there
+	if hexLen > 0 && hex[hexLen-1] == 16 {
+		firstByte = 1 << 5
+		hexLen-- // last part was the terminator, ignore that
+	}
+	var (
+		binLen = hexLen/2 + 1
+		ni     = 0 // index in hex
+		bi     = 1 // index in bin (compact)
+	)
+	if hexLen&1 == 1 {
+		firstByte |= 1 << 4 // odd flag
+		firstByte |= hex[0] // first nibble is contained in the first byte
+		ni++
+	}
+	for ; ni < hexLen; bi, ni = bi+1, ni+2 {
+		hex[bi] = hex[ni]<<4 | hex[ni+1]
+	}
+	hex[0] = firstByte
+	return hex[:binLen]
+}
+
 func compactToHex(compact []byte) []byte {
 	if len(compact) == 0 {
 		return compact
@@ -74,6 +102,18 @@ func keybytesToHex(str []byte) []byte {
 	}
 	nibbles[l-1] = 16
 	return nibbles
+}
+
+// writeHexKey writes the hexkey into the given slice.
+// OBS! This method omits the termination flag.
+// OBS! The dst slice must be at least 2x as large as the key
+func writeHexKey(dst []byte, key []byte) []byte {
+	_ = dst[2*len(key)-1]
+	for i, b := range key {
+		dst[i*2] = b / 16
+		dst[i*2+1] = b % 16
+	}
+	return dst[:2*len(key)]
 }
 
 // hexToKeybytes turns hex nibbles into key bytes.

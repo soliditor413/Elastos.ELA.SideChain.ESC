@@ -1,26 +1,32 @@
-// Copyright 2015 The Elastos.ELA.SideChain.ESC Authors
-// This file is part of the Elastos.ELA.SideChain.ESC library.
+// Copyright 2015 The go-ethereum Authors
+// This file is part of the go-ethereum library.
 //
-// The Elastos.ELA.SideChain.ESC library is free software: you can redistribute it and/or modify
+// The go-ethereum library is free software: you can redistribute it and/or modify
 // it under the terms of the GNU Lesser General Public License as published by
 // the Free Software Foundation, either version 3 of the License, or
 // (at your option) any later version.
 //
-// The Elastos.ELA.SideChain.ESC library is distributed in the hope that it will be useful,
+// The go-ethereum library is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
 // MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
 // GNU Lesser General Public License for more details.
 //
 // You should have received a copy of the GNU Lesser General Public License
-// along with the Elastos.ELA.SideChain.ESC library. If not, see <http://www.gnu.org/licenses/>.
+// along with the go-ethereum library. If not, see <http://www.gnu.org/licenses/>.
 
 package vm
 
 import (
-	"fmt"
+	"sync"
 
 	"github.com/holiman/uint256"
 )
+
+var memoryPool = sync.Pool{
+	New: func() any {
+		return &Memory{}
+	},
+}
 
 // Memory implements a simple memory model for the ethereum virtual machine.
 type Memory struct {
@@ -30,7 +36,18 @@ type Memory struct {
 
 // NewMemory returns a new memory model.
 func NewMemory() *Memory {
-	return &Memory{}
+	return memoryPool.Get().(*Memory)
+}
+
+// Free returns the memory to the pool.
+func (m *Memory) Free() {
+	// To reduce peak allocation, return only smaller memory instances to the pool.
+	const maxBufferSize = 16 << 10
+	if cap(m.store) <= maxBufferSize {
+		m.store = m.store[:0]
+		m.lastGasCost = 0
+		memoryPool.Put(m)
+	}
 }
 
 // Set sets offset + size to value
@@ -56,8 +73,7 @@ func (m *Memory) Set32(offset uint64, val *uint256.Int) {
 		panic("invalid memory: store empty")
 	}
 	// Fill in relevant bits
-	b32 := val.Bytes32()
-	copy(m.store[offset:], b32[:])
+	val.PutUint256(m.store[offset:])
 }
 
 // Resize resizes the memory to size
@@ -67,33 +83,26 @@ func (m *Memory) Resize(size uint64) {
 	}
 }
 
-// Get returns offset + size as a new slice
-func (m *Memory) GetCopy(offset, size int64) (cpy []byte) {
+// GetCopy returns offset + size as a new slice
+func (m *Memory) GetCopy(offset, size uint64) (cpy []byte) {
 	if size == 0 {
 		return nil
 	}
 
-	if len(m.store) > int(offset) {
-		cpy = make([]byte, size)
-		copy(cpy, m.store[offset:offset+size])
-
-		return
-	}
-
+	// memory is always resized before being accessed, no need to check bounds
+	cpy = make([]byte, size)
+	copy(cpy, m.store[offset:offset+size])
 	return
 }
 
 // GetPtr returns the offset + size
-func (m *Memory) GetPtr(offset, size int64) []byte {
+func (m *Memory) GetPtr(offset, size uint64) []byte {
 	if size == 0 {
 		return nil
 	}
 
-	if len(m.store) > int(offset) {
-		return m.store[offset : offset+size]
-	}
-
-	return nil
+	// memory is always resized before being accessed, no need to check bounds
+	return m.store[offset : offset+size]
 }
 
 // Len returns the length of the backing slice
@@ -106,17 +115,13 @@ func (m *Memory) Data() []byte {
 	return m.store
 }
 
-// Print dumps the content of the memory.
-func (m *Memory) Print() {
-	fmt.Printf("### mem %d bytes ###\n", len(m.store))
-	if len(m.store) > 0 {
-		addr := 0
-		for i := 0; i+32 <= len(m.store); i += 32 {
-			fmt.Printf("%03d: % x\n", addr, m.store[i:i+32])
-			addr++
-		}
-	} else {
-		fmt.Println("-- empty --")
+// Copy copies data from the src position slice into the dst position.
+// The source and destination may overlap.
+// OBS: This operation assumes that any necessary memory expansion has already been performed,
+// and this method may panic otherwise.
+func (m *Memory) Copy(dst, src, len uint64) {
+	if len == 0 {
+		return
 	}
-	fmt.Println("####################")
+	copy(m.store[dst:], m.store[src:src+len])
 }

@@ -1,12 +1,12 @@
-// Copyright 2022 The Elastos.ELA.SideChain.ESC Authors
-// This file is part of the Elastos.ELA.SideChain.ESC library.
+// Copyright 2022 The go-ethereum Authors
+// This file is part of the go-ethereum library.
 //
-// The Elastos.ELA.SideChain.ESC library is free software: you can redistribute it and/or modify
+// The go-ethereum library is free software: you can redistribute it and/or modify
 // it under the terms of the GNU Lesser General Public License as published by
 // the Free Software Foundation, either version 3 of the License, or
 // (at your option) any later version.
 //
-// The Elastos.ELA.SideChain.ESC library is distributed in the hope that it will be useful,
+// The go-ethereum library is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
 // MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
 // GNU Lesser General Public License for more details.
@@ -17,6 +17,11 @@
 package state
 
 import (
+	"fmt"
+	"maps"
+	"slices"
+	"strings"
+
 	"github.com/elastos/Elastos.ELA.SideChain.ESC/common"
 )
 
@@ -30,10 +35,19 @@ func newTransientStorage() transientStorage {
 
 // Set sets the transient-storage `value` for `key` at the given `addr`.
 func (t transientStorage) Set(addr common.Address, key, value common.Hash) {
-	if _, ok := t[addr]; !ok {
-		t[addr] = make(Storage)
+	if value == (common.Hash{}) { // this is a 'delete'
+		if _, ok := t[addr]; ok {
+			delete(t[addr], key)
+			if len(t[addr]) == 0 {
+				delete(t, addr)
+			}
+		}
+	} else {
+		if _, ok := t[addr]; !ok {
+			t[addr] = make(Storage)
+		}
+		t[addr][key] = value
 	}
-	t[addr][key] = value
 }
 
 // Get gets the transient storage for `key` at the given `addr`.
@@ -52,4 +66,22 @@ func (t transientStorage) Copy() transientStorage {
 		storage[key] = value.Copy()
 	}
 	return storage
+}
+
+// PrettyPrint prints the contents of the access list in a human-readable form
+func (t transientStorage) PrettyPrint() string {
+	out := new(strings.Builder)
+	sortedAddrs := slices.Collect(maps.Keys(t))
+	slices.SortFunc(sortedAddrs, common.Address.Cmp)
+
+	for _, addr := range sortedAddrs {
+		fmt.Fprintf(out, "%#x:", addr)
+		storage := t[addr]
+		sortedKeys := slices.Collect(maps.Keys(storage))
+		slices.SortFunc(sortedKeys, common.Hash.Cmp)
+		for _, key := range sortedKeys {
+			fmt.Fprintf(out, "  %X : %X\n", key, storage[key])
+		}
+	}
+	return out.String()
 }

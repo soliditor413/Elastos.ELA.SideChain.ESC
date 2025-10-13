@@ -1,41 +1,32 @@
-// Copyright 2016 The Elastos.ELA.SideChain.ESC Authors
-// This file is part of Elastos.ELA.SideChain.ESC.
+// Copyright 2016 The go-ethereum Authors
+// This file is part of go-ethereum.
 //
-// Elastos.ELA.SideChain.ESC is free software: you can redistribute it and/or modify
+// go-ethereum is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
 // the Free Software Foundation, either version 3 of the License, or
 // (at your option) any later version.
 //
-// Elastos.ELA.SideChain.ESC is distributed in the hope that it will be useful,
+// go-ethereum is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
 // MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
 // GNU General Public License for more details.
 //
 // You should have received a copy of the GNU General Public License
-// along with Elastos.ELA.SideChain.ESC. If not, see <http://www.gnu.org/licenses/>.
+// along with go-ethereum. If not, see <http://www.gnu.org/licenses/>.
 
 package main
 
 import (
 	"context"
 	"fmt"
-	"io/ioutil"
 	"os"
 	"testing"
 	"time"
 
-	"github.com/docker/docker/pkg/reexec"
 	"github.com/elastos/Elastos.ELA.SideChain.ESC/internal/cmdtest"
+	"github.com/elastos/Elastos.ELA.SideChain.ESC/internal/reexec"
 	"github.com/elastos/Elastos.ELA.SideChain.ESC/rpc"
 )
-
-func tmpdir(t *testing.T) string {
-	dir, err := ioutil.TempDir("", "geth-test")
-	if err != nil {
-		t.Fatal(err)
-	}
-	return dir
-}
 
 type testgeth struct {
 	*cmdtest.TestCmd
@@ -64,33 +55,36 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
+func initGeth(t *testing.T) string {
+	args := []string{"--networkid=42", "init", "./testdata/clique.json"}
+	t.Logf("Initializing geth: %v ", args)
+	g := runGeth(t, args...)
+	datadir := g.Datadir
+	g.WaitExit()
+	return datadir
+}
+
 // spawns geth with the given command line args. If the args don't set --datadir, the
 // child g gets a temporary data directory.
 func runGeth(t *testing.T, args ...string) *testgeth {
 	tt := &testgeth{}
 	tt.TestCmd = cmdtest.NewTestCmd(t, tt)
 	for i, arg := range args {
-		switch {
-		case arg == "-datadir" || arg == "--datadir":
+		switch arg {
+		case "--datadir":
 			if i < len(args)-1 {
 				tt.Datadir = args[i+1]
 			}
-		case arg == "-etherbase" || arg == "--etherbase":
+		case "--miner.etherbase":
 			if i < len(args)-1 {
 				tt.Etherbase = args[i+1]
 			}
 		}
 	}
 	if tt.Datadir == "" {
-		tt.Datadir = tmpdir(t)
-		tt.Cleanup = func() { os.RemoveAll(tt.Datadir) }
-		args = append([]string{"-datadir", tt.Datadir}, args...)
-		// Remove the temporary datadir if something fails below.
-		defer func() {
-			if t.Failed() {
-				tt.Cleanup()
-			}
-		}()
+		// The temporary datadir will be removed automatically if something fails below.
+		tt.Datadir = t.TempDir()
+		args = append([]string{"--datadir", tt.Datadir}, args...)
 	}
 
 	// Boot "geth". This actually runs the test binary but the TestMain

@@ -1,18 +1,18 @@
-// Copyright 2016 The Elastos.ELA.SideChain.ESC Authors
-// This file is part of the Elastos.ELA.SideChain.ESC library.
+// Copyright 2016 The go-ethereum Authors
+// This file is part of the go-ethereum library.
 //
-// The Elastos.ELA.SideChain.ESC library is free software: you can redistribute it and/or modify
+// The go-ethereum library is free software: you can redistribute it and/or modify
 // it under the terms of the GNU Lesser General Public License as published by
 // the Free Software Foundation, either version 3 of the License, or
 // (at your option) any later version.
 //
-// The Elastos.ELA.SideChain.ESC library is distributed in the hope that it will be useful,
+// The go-ethereum library is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
 // MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
 // GNU Lesser General Public License for more details.
 //
 // You should have received a copy of the GNU Lesser General Public License
-// along with the Elastos.ELA.SideChain.ESC library. If not, see <http://www.gnu.org/licenses/>.
+// along with the go-ethereum library. If not, see <http://www.gnu.org/licenses/>.
 
 package event
 
@@ -95,26 +95,49 @@ func (s *funcSub) Err() <-chan error {
 // Resubscribe applies backoff between calls to fn. The time between calls is adapted
 // based on the error rate, but will never exceed backoffMax.
 func Resubscribe(backoffMax time.Duration, fn ResubscribeFunc) Subscription {
-	s := &resubscribeSub{
-		waitTime:   backoffMax / 10,
-		backoffMax: backoffMax,
-		fn:         fn,
-		err:        make(chan error),
-		unsub:      make(chan struct{}),
-	}
-	go s.loop()
-	return s
+	return ResubscribeErr(backoffMax, func(ctx context.Context, _ error) (Subscription, error) {
+		return fn(ctx)
+	})
 }
 
 // A ResubscribeFunc attempts to establish a subscription.
 type ResubscribeFunc func(context.Context) (Subscription, error)
 
+// ResubscribeErr calls fn repeatedly to keep a subscription established. When the
+// subscription is established, ResubscribeErr waits for it to fail and calls fn again. This
+// process repeats until Unsubscribe is called or the active subscription ends
+// successfully.
+//
+// The difference between Resubscribe and ResubscribeErr is that with ResubscribeErr,
+// the error of the failing subscription is available to the callback for logging
+// purposes.
+//
+// ResubscribeErr applies backoff between calls to fn. The time between calls is adapted
+// based on the error rate, but will never exceed backoffMax.
+func ResubscribeErr(backoffMax time.Duration, fn ResubscribeErrFunc) Subscription {
+	s := &resubscribeSub{
+		waitTime:   backoffMax / 10,
+		backoffMax: backoffMax,
+		fn:         fn,
+		err:        make(chan error),
+		unsub:      make(chan struct{}, 1),
+	}
+	go s.loop()
+	return s
+}
+
+// A ResubscribeErrFunc attempts to establish a subscription.
+// For every call but the first, the second argument to this function is
+// the error that occurred with the previous subscription.
+type ResubscribeErrFunc func(context.Context, error) (Subscription, error)
+
 type resubscribeSub struct {
-	fn                   ResubscribeFunc
+	fn                   ResubscribeErrFunc
 	err                  chan error
 	unsub                chan struct{}
 	unsubOnce            sync.Once
 	lastTry              mclock.AbsTime
+	lastSubErr           error
 	waitTime, backoffMax time.Duration
 }
 
@@ -145,31 +168,30 @@ func (s *resubscribeSub) loop() {
 func (s *resubscribeSub) subscribe() Subscription {
 	subscribed := make(chan error)
 	var sub Subscription
-retry:
 	for {
 		s.lastTry = mclock.Now()
 		ctx, cancel := context.WithCancel(context.Background())
 		go func() {
-			rsub, err := s.fn(ctx)
+			rsub, err := s.fn(ctx, s.lastSubErr)
 			sub = rsub
 			subscribed <- err
 		}()
 		select {
 		case err := <-subscribed:
 			cancel()
-			if err != nil {
-				// Subscribing failed, wait before launching the next try.
-				if s.backoffWait() {
-					return nil
+			if err == nil {
+				if sub == nil {
+					panic("event: ResubscribeFunc returned nil subscription and no error")
 				}
-				continue retry
+				return sub
 			}
-			if sub == nil {
-				panic("event: ResubscribeFunc returned nil subscription and no error")
+			// Subscribing failed, wait before launching the next try.
+			if s.backoffWait() {
+				return nil // unsubscribed during wait
 			}
-			return sub
 		case <-s.unsub:
 			cancel()
+			<-subscribed // avoid leaking the s.fn goroutine.
 			return nil
 		}
 	}
@@ -179,6 +201,7 @@ func (s *resubscribeSub) waitForError(sub Subscription) bool {
 	defer sub.Unsubscribe()
 	select {
 	case err := <-sub.Err():
+		s.lastSubErr = err
 		return err == nil
 	case <-s.unsub:
 		return true

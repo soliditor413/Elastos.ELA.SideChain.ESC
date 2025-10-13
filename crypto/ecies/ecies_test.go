@@ -35,28 +35,34 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
-	"fmt"
+	"errors"
 	"math/big"
 	"testing"
 
 	"github.com/elastos/Elastos.ELA.SideChain.ESC/crypto"
 )
 
-// Ensure the KDF generates appropriately sized keys.
 func TestKDF(t *testing.T) {
-	msg := []byte("Hello, world")
-	h := sha256.New()
-
-	k, err := concatKDF(h, msg, nil, 64)
-	if err != nil {
-		t.Fatal(err)
+	tests := []struct {
+		length int
+		output []byte
+	}{
+		{6, decode("858b192fa2ed")},
+		{32, decode("858b192fa2ed4395e2bf88dd8d5770d67dc284ee539f12da8bceaa45d06ebae0")},
+		{48, decode("858b192fa2ed4395e2bf88dd8d5770d67dc284ee539f12da8bceaa45d06ebae0700f1ab918a5f0413b8140f9940d6955")},
+		{64, decode("858b192fa2ed4395e2bf88dd8d5770d67dc284ee539f12da8bceaa45d06ebae0700f1ab918a5f0413b8140f9940d6955f3467fd6672cce1024c5b1effccc0f61")},
 	}
-	if len(k) != 64 {
-		t.Fatalf("KDF: generated key is the wrong size (%d instead of 64\n", len(k))
+
+	for _, test := range tests {
+		h := sha256.New()
+		k := concatKDF(h, []byte("input"), nil, test.length)
+		if !bytes.Equal(k, test.output) {
+			t.Fatalf("KDF: generated key %x does not match expected output %x", k, test.output)
+		}
 	}
 }
 
-var ErrBadSharedKeys = fmt.Errorf("ecies: shared keys don't match")
+var ErrBadSharedKeys = errors.New("ecies: shared keys don't match")
 
 // cmpParams compares a set of ECIES parameters. We assume, as per the
 // docs, that AES is the only supported symmetric encryption algorithm.
@@ -64,22 +70,6 @@ func cmpParams(p1, p2 *ECIESParams) bool {
 	return p1.hashAlgo == p2.hashAlgo &&
 		p1.KeyLen == p2.KeyLen &&
 		p1.BlockSize == p2.BlockSize
-}
-
-// cmpPublic returns true if the two public keys represent the same pojnt.
-func cmpPublic(pub1, pub2 PublicKey) bool {
-	if pub1.X == nil || pub1.Y == nil {
-		fmt.Println(ErrInvalidPublicKey.Error())
-		return false
-	}
-	if pub2.X == nil || pub2.Y == nil {
-		fmt.Println(ErrInvalidPublicKey.Error())
-		return false
-	}
-	pub1Out := elliptic.Marshal(pub1.Curve, pub1.X, pub1.Y)
-	pub2Out := elliptic.Marshal(pub2.Curve, pub2.X, pub2.Y)
-
-	return bytes.Equal(pub1Out, pub2Out)
 }
 
 // Validate the ECDH component.
@@ -174,7 +164,7 @@ func TestTooBigSharedKey(t *testing.T) {
 
 // Benchmark the generation of P256 keys.
 func BenchmarkGenerateKeyP256(b *testing.B) {
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		if _, err := GenerateKey(rand.Reader, elliptic.P256(), nil); err != nil {
 			b.Fatal(err)
 		}
@@ -187,8 +177,7 @@ func BenchmarkGenSharedKeyP256(b *testing.B) {
 	if err != nil {
 		b.Fatal(err)
 	}
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		_, err := prv.GenerateShared(&prv.PublicKey, 16, 16)
 		if err != nil {
 			b.Fatal(err)
@@ -202,8 +191,7 @@ func BenchmarkGenSharedKeyS256(b *testing.B) {
 	if err != nil {
 		b.Fatal(err)
 	}
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		_, err := prv.GenerateShared(&prv.PublicKey, 16, 16)
 		if err != nil {
 			b.Fatal(err)
@@ -289,7 +277,7 @@ var testCases = []testCase{
 	{
 		Curve:    elliptic.P384(),
 		Name:     "P384",
-		Expected: ECIES_AES256_SHA384,
+		Expected: ECIES_AES192_SHA384,
 	},
 	{
 		Curve:    elliptic.P521(),
@@ -309,8 +297,8 @@ func TestParamSelection(t *testing.T) {
 
 func testParamSelection(t *testing.T, c testCase) {
 	params := ParamsFromCurve(c.Curve)
-	if params == nil && c.Expected != nil {
-		t.Fatalf("%s (%s)\n", ErrInvalidParams.Error(), c.Name)
+	if params == nil {
+		t.Fatal("ParamsFromCurve returned nil")
 	} else if params != nil && !cmpParams(params, c.Expected) {
 		t.Fatalf("ecies: parameters should be invalid (%s)\n", c.Name)
 	}
@@ -344,7 +332,6 @@ func testParamSelection(t *testing.T, c testCase) {
 	if err == nil {
 		t.Fatalf("ecies: encryption should not have succeeded (%s)\n", c.Name)
 	}
-
 }
 
 // Ensure that the basic public key validation in the decryption operation
@@ -417,7 +404,7 @@ func TestSharedKeyStatic(t *testing.T) {
 		t.Fatal(ErrBadSharedKeys)
 	}
 
-	sk, _ := hex.DecodeString("167ccc13ac5e8a26b131c3446030c60fbfac6aa8e31149d0869f93626a4cdf62")
+	sk := decode("167ccc13ac5e8a26b131c3446030c60fbfac6aa8e31149d0869f93626a4cdf62")
 	if !bytes.Equal(sk1, sk) {
 		t.Fatalf("shared secret mismatch: want: %x have: %x", sk, sk1)
 	}
@@ -429,4 +416,12 @@ func hexKey(prv string) *PrivateKey {
 		panic(err)
 	}
 	return ImportECDSA(key)
+}
+
+func decode(s string) []byte {
+	bytes, err := hex.DecodeString(s)
+	if err != nil {
+		panic(err)
+	}
+	return bytes
 }

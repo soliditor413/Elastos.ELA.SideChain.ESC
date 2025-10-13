@@ -1,103 +1,135 @@
-// Copyright 2019 The Elastos.ELA.SideChain.ESC Authors
-// This file is part of the Elastos.ELA.SideChain.ESC library.
+// Copyright 2019 The go-ethereum Authors
+// This file is part of the go-ethereum library.
 //
-// The Elastos.ELA.SideChain.ESC library is free software: you can redistribute it and/or modify
+// The go-ethereum library is free software: you can redistribute it and/or modify
 // it under the terms of the GNU Lesser General Public License as published by
 // the Free Software Foundation, either version 3 of the License, or
 // (at your option) any later version.
 //
-// The Elastos.ELA.SideChain.ESC library is distributed in the hope that it will be useful,
+// The go-ethereum library is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
 // MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
 // GNU Lesser General Public License for more details.
 //
 // You should have received a copy of the GNU Lesser General Public License
-// along with the Elastos.ELA.SideChain.ESC library. If not, see <http://www.gnu.org/licenses/>.
+// along with the go-ethereum library. If not, see <http://www.gnu.org/licenses/>.
 
 package graphql
 
 import (
-	"fmt"
-	"net"
+	"context"
+	"encoding/json"
 	"net/http"
+	"strconv"
+	"sync"
+	"time"
 
+	"github.com/elastos/Elastos.ELA.SideChain.ESC/eth/filters"
 	"github.com/elastos/Elastos.ELA.SideChain.ESC/internal/ethapi"
-	"github.com/elastos/Elastos.ELA.SideChain.ESC/log"
-	"github.com/elastos/Elastos.ELA.SideChain.ESC/p2p"
+	"github.com/elastos/Elastos.ELA.SideChain.ESC/node"
 	"github.com/elastos/Elastos.ELA.SideChain.ESC/rpc"
 	"github.com/graph-gophers/graphql-go"
-	"github.com/graph-gophers/graphql-go/relay"
+	gqlErrors "github.com/graph-gophers/graphql-go/errors"
 )
 
-// Service encapsulates a GraphQL service.
-type Service struct {
-	endpoint string           // The host:port endpoint for this service.
-	cors     []string         // Allowed CORS domains
-	vhosts   []string         // Recognised vhosts
-	timeouts rpc.HTTPTimeouts // Timeout settings for HTTP requests.
-	backend  ethapi.Backend   // The backend that queries will operate onn.
-	handler  http.Handler     // The `http.Handler` used to answer queries.
-	listener net.Listener     // The listening socket.
+// maxQueryDepth limits the maximum field nesting depth allowed in GraphQL queries.
+const maxQueryDepth = 20
+
+type handler struct {
+	Schema *graphql.Schema
+}
+
+func (h handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	var params struct {
+		Query         string                 `json:"query"`
+		OperationName string                 `json:"operationName"`
+		Variables     map[string]interface{} `json:"variables"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&params); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	var (
+		ctx       = r.Context()
+		responded sync.Once
+		timer     *time.Timer
+		cancel    context.CancelFunc
+	)
+	ctx, cancel = context.WithCancel(ctx)
+	defer cancel()
+
+	if timeout, ok := rpc.ContextRequestTimeout(ctx); ok {
+		timer = time.AfterFunc(timeout, func() {
+			responded.Do(func() {
+				// Cancel request handling.
+				cancel()
+
+				// Create the timeout response.
+				response := &graphql.Response{
+					Errors: []*gqlErrors.QueryError{{Message: "request timed out"}},
+				}
+				responseJSON, err := json.Marshal(response)
+				if err != nil {
+					http.Error(w, err.Error(), http.StatusInternalServerError)
+					return
+				}
+
+				// Setting this disables gzip compression in package node.
+				w.Header().Set("Transfer-Encoding", "identity")
+
+				// Flush the response. Since we are writing close to the response timeout,
+				// chunked transfer encoding must be disabled by setting content-length.
+				w.Header().Set("Content-Type", "application/json")
+				w.Header().Set("Content-Length", strconv.Itoa(len(responseJSON)))
+				w.Write(responseJSON)
+				if flush, ok := w.(http.Flusher); ok {
+					flush.Flush()
+				}
+			})
+		})
+	}
+
+	response := h.Schema.Exec(ctx, params.Query, params.OperationName, params.Variables)
+	if timer != nil {
+		timer.Stop()
+	}
+	responded.Do(func() {
+		responseJSON, err := json.Marshal(response)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if len(response.Errors) > 0 {
+			w.WriteHeader(http.StatusBadRequest)
+		}
+		w.Write(responseJSON)
+	})
 }
 
 // New constructs a new GraphQL service instance.
-func New(backend ethapi.Backend, endpoint string, cors, vhosts []string, timeouts rpc.HTTPTimeouts) (*Service, error) {
-	return &Service{
-		endpoint: endpoint,
-		cors:     cors,
-		vhosts:   vhosts,
-		timeouts: timeouts,
-		backend:  backend,
-	}, nil
-}
-
-// Protocols returns the list of protocols exported by this service.
-func (s *Service) Protocols() []p2p.Protocol { return nil }
-
-// APIs returns the list of APIs exported by this service.
-func (s *Service) APIs() []rpc.API { return nil }
-
-// Start is called after all services have been constructed and the networking
-// layer was also initialized to spawn any goroutines required by the service.
-func (s *Service) Start(server *p2p.Server) error {
-	var err error
-	s.handler, err = newHandler(s.backend)
-	if err != nil {
-		return err
-	}
-	if s.listener, err = net.Listen("tcp", s.endpoint); err != nil {
-		return err
-	}
-	go rpc.NewHTTPServer(s.cors, s.vhosts, s.timeouts, s.handler).Serve(s.listener)
-	log.Info("GraphQL endpoint opened", "url", fmt.Sprintf("http://%s", s.endpoint))
-	return nil
+func New(stack *node.Node, backend ethapi.Backend, filterSystem *filters.FilterSystem, cors, vhosts []string) error {
+	_, err := newHandler(stack, backend, filterSystem, cors, vhosts)
+	return err
 }
 
 // newHandler returns a new `http.Handler` that will answer GraphQL queries.
 // It additionally exports an interactive query browser on the / endpoint.
-func newHandler(backend ethapi.Backend) (http.Handler, error) {
-	q := Resolver{backend}
+func newHandler(stack *node.Node, backend ethapi.Backend, filterSystem *filters.FilterSystem, cors, vhosts []string) (*handler, error) {
+	q := Resolver{backend, filterSystem}
 
-	s, err := graphql.ParseSchema(schema, &q)
+	s, err := graphql.ParseSchema(schema, &q, graphql.MaxDepth(maxQueryDepth))
 	if err != nil {
 		return nil, err
 	}
-	h := &relay.Handler{Schema: s}
+	h := handler{Schema: s}
+	handler := node.NewHTTPHandlerStack(h, cors, vhosts, nil)
 
-	mux := http.NewServeMux()
-	mux.Handle("/", GraphiQL{})
-	mux.Handle("/graphql", h)
-	mux.Handle("/graphql/", h)
-	return mux, nil
-}
+	stack.RegisterHandler("GraphQL UI", "/graphql/ui", GraphiQL{})
+	stack.RegisterHandler("GraphQL UI", "/graphql/ui/", GraphiQL{})
+	stack.RegisterHandler("GraphQL", "/graphql", handler)
+	stack.RegisterHandler("GraphQL", "/graphql/", handler)
 
-// Stop terminates all goroutines belonging to the service, blocking until they
-// are all terminated.
-func (s *Service) Stop() error {
-	if s.listener != nil {
-		s.listener.Close()
-		s.listener = nil
-		log.Info("GraphQL endpoint closed", "url", fmt.Sprintf("http://%s", s.endpoint))
-	}
-	return nil
+	return &h, nil
 }

@@ -1,23 +1,24 @@
-// Copyright 2018 The Elastos.ELA.SideChain.ESC Authors
-// This file is part of the Elastos.ELA.SideChain.ESC library.
+// Copyright 2018 The go-ethereum Authors
+// This file is part of the go-ethereum library.
 //
-// The Elastos.ELA.SideChain.ESC library is free software: you can redistribute it and/or modify
+// The go-ethereum library is free software: you can redistribute it and/or modify
 // it under the terms of the GNU Lesser General Public License as published by
 // the Free Software Foundation, either version 3 of the License, or
 // (at your option) any later version.
 //
-// The Elastos.ELA.SideChain.ESC library is distributed in the hope that it will be useful,
+// The go-ethereum library is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
 // MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
 // GNU Lesser General Public License for more details.
 //
 // You should have received a copy of the GNU Lesser General Public License
-// along with the Elastos.ELA.SideChain.ESC library. If not, see <http://www.gnu.org/licenses/>.
+// along with the go-ethereum library. If not, see <http://www.gnu.org/licenses/>.
 
 package core
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -25,14 +26,15 @@ import (
 	"sync"
 
 	"github.com/elastos/Elastos.ELA.SideChain.ESC/common/hexutil"
+	"github.com/elastos/Elastos.ELA.SideChain.ESC/console/prompt"
 	"github.com/elastos/Elastos.ELA.SideChain.ESC/internal/ethapi"
 	"github.com/elastos/Elastos.ELA.SideChain.ESC/log"
-	"golang.org/x/crypto/ssh/terminal"
 )
 
 type CommandlineUI struct {
-	in *bufio.Reader
-	mu sync.Mutex
+	in  *bufio.Reader
+	mu  sync.Mutex
+	api *UIServerAPI
 }
 
 func NewCommandlineUI() *CommandlineUI {
@@ -40,7 +42,7 @@ func NewCommandlineUI() *CommandlineUI {
 }
 
 func (ui *CommandlineUI) RegisterUIServer(api *UIServerAPI) {
-	// noop
+	ui.api = api
 }
 
 // readString reads a single line from stdin, trimming if from spaces, enforcing
@@ -58,48 +60,18 @@ func (ui *CommandlineUI) readString() string {
 	}
 }
 
-// readPassword reads a single line from stdin, trimming it from the trailing new
-// line and returns it. The input will not be echoed.
-func (ui *CommandlineUI) readPassword() string {
-	fmt.Printf("Enter password to approve:\n")
-	fmt.Printf("> ")
-
-	text, err := terminal.ReadPassword(int(os.Stdin.Fd()))
-	if err != nil {
-		log.Crit("Failed to read password", "err", err)
-	}
-	fmt.Println()
-	fmt.Println("-----------------------")
-	return string(text)
-}
-
-// readPassword reads a single line from stdin, trimming it from the trailing new
-// line and returns it. The input will not be echoed.
-func (ui *CommandlineUI) readPasswordText(inputstring string) string {
-	fmt.Printf("Enter %s:\n", inputstring)
-	fmt.Printf("> ")
-	text, err := terminal.ReadPassword(int(os.Stdin.Fd()))
-	if err != nil {
-		log.Crit("Failed to read password", "err", err)
-	}
-	fmt.Println("-----------------------")
-	return string(text)
-}
-
 func (ui *CommandlineUI) OnInputRequired(info UserInputRequest) (UserInputResponse, error) {
-
 	fmt.Printf("## %s\n\n%s\n", info.Title, info.Prompt)
+	defer fmt.Println("-----------------------")
 	if info.IsPassword {
-		fmt.Printf("> ")
-		text, err := terminal.ReadPassword(int(os.Stdin.Fd()))
+		text, err := prompt.Stdin.PromptPassword("> ")
 		if err != nil {
-			log.Error("Failed to read password", "err", err)
+			log.Error("Failed to read password", "error", err)
+			return UserInputResponse{}, err
 		}
-		fmt.Println("-----------------------")
-		return UserInputResponse{string(text)}, err
+		return UserInputResponse{text}, nil
 	}
 	text := ui.readString()
-	fmt.Println("-----------------------")
 	return UserInputResponse{text}, nil
 }
 
@@ -113,10 +85,19 @@ func (ui *CommandlineUI) confirm() bool {
 	return false
 }
 
+// sanitize quotes and truncates 'txt' if longer than 'limit'. If truncated,
+// and ellipsis is added after the quoted string
+func sanitize(txt string, limit int) string {
+	if len(txt) > limit {
+		return fmt.Sprintf("%q...", txt[:limit])
+	}
+	return fmt.Sprintf("%q", txt)
+}
+
 func showMetadata(metadata Metadata) {
 	fmt.Printf("Request context:\n\t%v -> %v -> %v\n", metadata.Remote, metadata.Scheme, metadata.Local)
 	fmt.Printf("\nAdditional HTTP header data, provided by the external caller:\n")
-	fmt.Printf("\tUser-Agent: %v\n\tOrigin: %v\n", metadata.UserAgent, metadata.Origin)
+	fmt.Printf("\tUser-Agent: %v\n\tOrigin: %v\n", sanitize(metadata.UserAgent, 200), sanitize(metadata.Origin, 100))
 }
 
 // ApproveTx prompt the user for confirmation to request to sign Transaction
@@ -133,15 +114,37 @@ func (ui *CommandlineUI) ApproveTx(request *SignTxRequest) (SignTxResponse, erro
 	} else {
 		fmt.Printf("to:    <contact creation>\n")
 	}
-	fmt.Printf("from:     %v\n", request.Transaction.From.String())
-	fmt.Printf("value:    %v wei\n", weival)
-	fmt.Printf("gas:      %v (%v)\n", request.Transaction.Gas, uint64(request.Transaction.Gas))
-	fmt.Printf("gasprice: %v wei\n", request.Transaction.GasPrice.ToInt())
+	fmt.Printf("from:               %v\n", request.Transaction.From.String())
+	fmt.Printf("value:              %v wei\n", weival)
+	fmt.Printf("gas:                %v (%v)\n", request.Transaction.Gas, uint64(request.Transaction.Gas))
+	if request.Transaction.MaxFeePerGas != nil {
+		fmt.Printf("maxFeePerGas:          %v wei\n", request.Transaction.MaxFeePerGas.ToInt())
+		fmt.Printf("maxPriorityFeePerGas:  %v wei\n", request.Transaction.MaxPriorityFeePerGas.ToInt())
+	} else {
+		fmt.Printf("gasprice: %v wei\n", request.Transaction.GasPrice.ToInt())
+	}
 	fmt.Printf("nonce:    %v (%v)\n", request.Transaction.Nonce, uint64(request.Transaction.Nonce))
+	if chainId := request.Transaction.ChainID; chainId != nil {
+		fmt.Printf("chainid:  %v\n", chainId)
+	}
+	if list := request.Transaction.AccessList; list != nil {
+		fmt.Printf("Accesslist:\n")
+		for i, el := range *list {
+			fmt.Printf(" %d. %v\n", i, el.Address)
+			for j, slot := range el.StorageKeys {
+				fmt.Printf("   %d. %v\n", j, slot)
+			}
+		}
+	}
+	if len(request.Transaction.BlobHashes) > 0 {
+		fmt.Printf("Blob hashes:\n")
+		for _, bh := range request.Transaction.BlobHashes {
+			fmt.Printf("   %v\n", bh)
+		}
+	}
 	if request.Transaction.Data != nil {
 		d := *request.Transaction.Data
 		if len(d) > 0 {
-
 			fmt.Printf("data:     %v\n", hexutil.Encode(d))
 		}
 	}
@@ -151,7 +154,6 @@ func (ui *CommandlineUI) ApproveTx(request *SignTxRequest) (SignTxResponse, erro
 			fmt.Printf("  * %s : %s\n", m.Typ, m.Message)
 		}
 		fmt.Println()
-
 	}
 	fmt.Printf("\n")
 	showMetadata(request.Meta)
@@ -169,11 +171,18 @@ func (ui *CommandlineUI) ApproveSignData(request *SignDataRequest) (SignDataResp
 
 	fmt.Printf("-------- Sign data request--------------\n")
 	fmt.Printf("Account:  %s\n", request.Address.String())
+	if len(request.Callinfo) != 0 {
+		fmt.Printf("\nValidation messages:\n")
+		for _, m := range request.Callinfo {
+			fmt.Printf("  * %s : %s\n", m.Typ, m.Message)
+		}
+		fmt.Println()
+	}
 	fmt.Printf("messages:\n")
 	for _, nvt := range request.Messages {
 		fmt.Printf("\u00a0\u00a0%v\n", strings.TrimSpace(nvt.Pprint(1)))
 	}
-	fmt.Printf("raw data:  \n%q\n", request.Rawdata)
+	fmt.Printf("raw data:  \n\t%q\n", request.Rawdata)
 	fmt.Printf("data hash:  %v\n", request.Hash)
 	fmt.Printf("-------------------------------------------\n")
 	showMetadata(request.Meta)
@@ -206,7 +215,6 @@ func (ui *CommandlineUI) ApproveListing(request *ListRequest) (ListResponse, err
 
 // ApproveNewAccount prompt the user for confirmation to create new Account, and reveal to caller
 func (ui *CommandlineUI) ApproveNewAccount(request *NewAccountRequest) (NewAccountResponse, error) {
-
 	ui.mu.Lock()
 	defer ui.mu.Unlock()
 
@@ -241,10 +249,33 @@ func (ui *CommandlineUI) OnApprovedTx(tx ethapi.SignTransactionResult) {
 	}
 }
 
-func (ui *CommandlineUI) OnSignerStartup(info StartupInfo) {
+func (ui *CommandlineUI) showAccounts() {
+	accounts, err := ui.api.ListAccounts(context.Background())
+	if err != nil {
+		log.Error("Error listing accounts", "err", err)
+		return
+	}
+	if len(accounts) == 0 {
+		fmt.Print("No accounts found\n")
+		return
+	}
+	var msg string
+	var out = new(strings.Builder)
+	if limit := 20; len(accounts) > limit {
+		msg = fmt.Sprintf("\nFirst %d accounts listed (%d more available).\n", limit, len(accounts)-limit)
+		accounts = accounts[:limit]
+	}
+	fmt.Fprint(out, "\n------- Available accounts -------\n")
+	for i, account := range accounts {
+		fmt.Fprintf(out, "%d. %s at %s\n", i, account.Address, account.URL)
+	}
+	fmt.Print(out.String(), msg)
+}
 
-	fmt.Printf("------- Signer info -------\n")
+func (ui *CommandlineUI) OnSignerStartup(info StartupInfo) {
+	fmt.Print("\n------- Signer info -------\n")
 	for k, v := range info.Info {
 		fmt.Printf("* %v : %v\n", k, v)
 	}
+	go ui.showAccounts()
 }

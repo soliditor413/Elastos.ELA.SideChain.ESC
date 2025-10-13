@@ -1,22 +1,23 @@
-// Copyright 2014 The Elastos.ELA.SideChain.ESC Authors
-// This file is part of the Elastos.ELA.SideChain.ESC library.
+// Copyright 2014 The go-ethereum Authors
+// This file is part of the go-ethereum library.
 //
-// The Elastos.ELA.SideChain.ESC library is free software: you can redistribute it and/or modify
+// The go-ethereum library is free software: you can redistribute it and/or modify
 // it under the terms of the GNU Lesser General Public License as published by
 // the Free Software Foundation, either version 3 of the License, or
 // (at your option) any later version.
 //
-// The Elastos.ELA.SideChain.ESC library is distributed in the hope that it will be useful,
+// The go-ethereum library is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
 // MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
 // GNU Lesser General Public License for more details.
 //
 // You should have received a copy of the GNU Lesser General Public License
-// along with the Elastos.ELA.SideChain.ESC library. If not, see <http://www.gnu.org/licenses/>.
+// along with the go-ethereum library. If not, see <http://www.gnu.org/licenses/>.
 
 package types
 
 import (
+	"encoding/binary"
 	"fmt"
 	"math/big"
 
@@ -57,28 +58,38 @@ func (b *Bloom) SetBytes(d []byte) {
 }
 
 // Add adds d to the filter. Future calls of Test(d) will return true.
-func (b *Bloom) Add(d *big.Int) {
-	bin := new(big.Int).SetBytes(b[:])
-	bin.Or(bin, bloom9(d.Bytes()))
-	b.SetBytes(bin.Bytes())
+func (b *Bloom) Add(d []byte) {
+	var buf [6]byte
+	b.AddWithBuffer(d, &buf)
+}
+
+// add is internal version of Add, which takes a scratch buffer for reuse (needs to be at least 6 bytes)
+func (b *Bloom) AddWithBuffer(d []byte, buf *[6]byte) {
+	i1, v1, i2, v2, i3, v3 := bloomValues(d, buf)
+	b[i1] |= v1
+	b[i2] |= v2
+	b[i3] |= v3
 }
 
 // Big converts b to a big integer.
+// Note: Converting a bloom filter to a big.Int and then calling GetBytes
+// does not return the same bytes, since big.Int will trim leading zeroes
 func (b Bloom) Big() *big.Int {
 	return new(big.Int).SetBytes(b[:])
 }
 
+// Bytes returns the backing byte slice of the bloom
 func (b Bloom) Bytes() []byte {
 	return b[:]
 }
 
-func (b Bloom) Test(test *big.Int) bool {
-	return BloomLookup(b, test)
-}
-
-func (b Bloom) TestBytes(test []byte) bool {
-	return b.Test(new(big.Int).SetBytes(test))
-
+// Test checks if the given topic is present in the bloom filter
+func (b Bloom) Test(topic []byte) bool {
+	var buf [6]byte
+	i1, v1, i2, v2, i3, v3 := bloomValues(topic, &buf)
+	return v1 == v1&b[i1] &&
+		v2 == v2&b[i2] &&
+		v3 == v3&b[i3]
 }
 
 // MarshalText encodes b as a hex string with 0x prefix.
@@ -91,79 +102,63 @@ func (b *Bloom) UnmarshalText(input []byte) error {
 	return hexutil.UnmarshalFixedText("Bloom", input, b[:])
 }
 
-func CreateBloom(receipts Receipts) Bloom {
-	bin := new(big.Int)
-	for _, receipt := range receipts {
-		bin.Or(bin, LogsBloom(receipt.Logs))
-	}
-
-	return BytesToBloom(bin.Bytes())
-}
-
-// Add tx_from and tx_to into BloomLogs.
-func CreateBloomWithTxList(receipts Receipts, txs []*Transaction) Bloom {
-	bin := new(big.Int)
-	var frontierSigner = FrontierSigner{}
-	var eip155Signer EIP155Signer
-	var signer Signer
-	for _, receipt := range receipts {
-		bin.Or(bin, LogsBloom(receipt.Logs))
-		txHash := receipt.TxHash
-		for _, tx := range txs {
-			if (*tx).Hash() == txHash {
-				to := tx.To()
-				if tx.Protected() {
-					if eip155Signer == (EIP155Signer{}) {
-						eip155Signer = NewEIP155Signer(tx.ChainId())
-					}
-					signer = eip155Signer
-				} else {
-					signer = frontierSigner
-				}
-				from, _ := Sender(signer, tx)
-				bin.Or(bin, bloom9(from[:]))
-				if to != nil {
-					bin.Or(bin, bloom9(to[:]))
-				}
-				break
-			}
-		}
-	}
-
-	return BytesToBloom(bin.Bytes())
-}
-
-func LogsBloom(logs []*Log) *big.Int {
-	bin := new(big.Int)
-	for _, log := range logs {
-		bin.Or(bin, bloom9(log.Address.Bytes()))
+// CreateBloom creates a bloom filter out of the give Receipt (+Logs)
+func CreateBloom(receipt *Receipt) Bloom {
+	var (
+		bin Bloom
+		buf [6]byte
+	)
+	for _, log := range receipt.Logs {
+		bin.AddWithBuffer(log.Address.Bytes(), &buf)
 		for _, b := range log.Topics {
-			bin.Or(bin, bloom9(b[:]))
+			bin.AddWithBuffer(b[:], &buf)
 		}
 	}
-
 	return bin
 }
 
-func bloom9(b []byte) *big.Int {
-	b = crypto.Keccak256(b)
-
-	r := new(big.Int)
-
-	for i := 0; i < 6; i += 2 {
-		t := big.NewInt(1)
-		b := (uint(b[i+1]) + (uint(b[i]) << 8)) & 2047
-		r.Or(r, t.Lsh(t, b))
+// MergeBloom merges the precomputed bloom filters in the Receipts without
+// recalculating them. It assumes that each receipt’s Bloom field is already
+// correctly populated.
+func MergeBloom(receipts Receipts) Bloom {
+	var bin Bloom
+	for _, receipt := range receipts {
+		if len(receipt.Logs) != 0 {
+			bl := receipt.Bloom.Bytes()
+			for i := range bin {
+				bin[i] |= bl[i]
+			}
+		}
 	}
-
-	return r
+	return bin
 }
 
-var Bloom9 = bloom9
+// Bloom9 returns the bloom filter for the given data
+func Bloom9(data []byte) []byte {
+	var b Bloom
+	b.SetBytes(data)
+	return b.Bytes()
+}
 
+// bloomValues returns the bytes (index-value pairs) to set for the given data
+func bloomValues(data []byte, hashbuf *[6]byte) (uint, byte, uint, byte, uint, byte) {
+	sha := hasherPool.Get().(crypto.KeccakState)
+	sha.Reset()
+	sha.Write(data)
+	sha.Read(hashbuf[:])
+	hasherPool.Put(sha)
+	// The actual bits to flip
+	v1 := byte(1 << (hashbuf[1] & 0x7))
+	v2 := byte(1 << (hashbuf[3] & 0x7))
+	v3 := byte(1 << (hashbuf[5] & 0x7))
+	// The indices for the bytes to OR in
+	i1 := BloomByteLength - uint((binary.BigEndian.Uint16(hashbuf[0:])&0x7ff)>>3) - 1
+	i2 := BloomByteLength - uint((binary.BigEndian.Uint16(hashbuf[2:])&0x7ff)>>3) - 1
+	i3 := BloomByteLength - uint((binary.BigEndian.Uint16(hashbuf[4:])&0x7ff)>>3) - 1
+	return i1, v1, i2, v2, i3, v3
+}
+
+// BloomLookup is a convenience-method to check presence in the bloom filter
 func BloomLookup(bin Bloom, topic bytesBacked) bool {
-	bloom := bin.Big()
-	cmp := bloom9(topic.Bytes())
-
-	return bloom.And(bloom, cmp).Cmp(cmp) == 0
+	return bin.Test(topic.Bytes())
 }

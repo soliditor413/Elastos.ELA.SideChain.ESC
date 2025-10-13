@@ -1,111 +1,155 @@
-// Copyright 2015 The Elastos.ELA.SideChain.ESC Authors
-// This file is part of the Elastos.ELA.SideChain.ESC library.
+// Copyright 2015 The go-ethereum Authors
+// This file is part of the go-ethereum library.
 //
-// The Elastos.ELA.SideChain.ESC library is free software: you can redistribute it and/or modify
+// The go-ethereum library is free software: you can redistribute it and/or modify
 // it under the terms of the GNU Lesser General Public License as published by
 // the Free Software Foundation, either version 3 of the License, or
 // (at your option) any later version.
 //
-// The Elastos.ELA.SideChain.ESC library is distributed in the hope that it will be useful,
+// The go-ethereum library is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
 // MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
 // GNU Lesser General Public License for more details.
 //
 // You should have received a copy of the GNU Lesser General Public License
-// along with the Elastos.ELA.SideChain.ESC library. If not, see <http://www.gnu.org/licenses/>.
+// along with the go-ethereum library. If not, see <http://www.gnu.org/licenses/>.
 
 package tests
 
 import (
+	"errors"
 	"fmt"
+	"math/big"
 
 	"github.com/elastos/Elastos.ELA.SideChain.ESC/common"
 	"github.com/elastos/Elastos.ELA.SideChain.ESC/common/hexutil"
+	"github.com/elastos/Elastos.ELA.SideChain.ESC/common/math"
 	"github.com/elastos/Elastos.ELA.SideChain.ESC/core"
 	"github.com/elastos/Elastos.ELA.SideChain.ESC/core/types"
 	"github.com/elastos/Elastos.ELA.SideChain.ESC/params"
-	"github.com/elastos/Elastos.ELA.SideChain.ESC/rlp"
 )
 
 // TransactionTest checks RLP decoding and sender derivation of transactions.
 type TransactionTest struct {
-	RLP            hexutil.Bytes `json:"rlp"`
-	Byzantium      ttFork
-	Constantinople ttFork
-	Istanbul       ttFork
-	EIP150         ttFork
-	EIP158         ttFork
-	Frontier       ttFork
-	Homestead      ttFork
+	Txbytes hexutil.Bytes `json:"txbytes"`
+	Result  map[string]*ttFork
 }
 
 type ttFork struct {
-	Sender common.UnprefixedAddress `json:"sender"`
-	Hash   common.UnprefixedHash    `json:"hash"`
+	Sender       *common.UnprefixedAddress `json:"sender"`
+	Hash         *common.UnprefixedHash    `json:"hash"`
+	Exception    *string                   `json:"exception"`
+	IntrinsicGas math.HexOrDecimal64       `json:"intrinsicGas"`
 }
 
-func (tt *TransactionTest) Run(config *params.ChainConfig) error {
-
-	validateTx := func(rlpData hexutil.Bytes, signer types.Signer, isHomestead bool, isIstanbul bool) (*common.Address, *common.Hash, error) {
-		tx := new(types.Transaction)
-		if err := rlp.DecodeBytes(rlpData, tx); err != nil {
-			return nil, nil, err
+func (tt *TransactionTest) validate() error {
+	if tt.Txbytes == nil {
+		return errors.New("missing txbytes")
+	}
+	for name, fork := range tt.Result {
+		if err := tt.validateFork(fork); err != nil {
+			return fmt.Errorf("invalid %s: %v", name, err)
 		}
-		sender, err := types.Sender(signer, tx)
+	}
+	return nil
+}
+
+func (tt *TransactionTest) validateFork(fork *ttFork) error {
+	if fork == nil {
+		return nil
+	}
+	if fork.Hash == nil && fork.Exception == nil {
+		return errors.New("missing hash and exception")
+	}
+	if fork.Hash != nil && fork.Sender == nil {
+		return errors.New("missing sender")
+	}
+	return nil
+}
+
+func (tt *TransactionTest) Run() error {
+	if err := tt.validate(); err != nil {
+		return err
+	}
+	validateTx := func(rlpData hexutil.Bytes, signer types.Signer, rules *params.Rules) (sender common.Address, hash common.Hash, requiredGas uint64, err error) {
+		tx := new(types.Transaction)
+		if err = tx.UnmarshalBinary(rlpData); err != nil {
+			return
+		}
+		sender, err = types.Sender(signer, tx)
 		if err != nil {
-			return nil, nil, err
+			return
 		}
 		// Intrinsic gas
-		requiredGas, err := core.IntrinsicGas(tx.Data(), tx.To() == nil, isHomestead, isIstanbul)
+		requiredGas, err = core.IntrinsicGas(tx.Data(), tx.AccessList(), tx.SetCodeAuthorizations(), tx.To() == nil, rules.IsHomestead, rules.IsIstanbul, rules.IsShanghai)
 		if err != nil {
-			return nil, nil, err
+			return
 		}
 		if requiredGas > tx.Gas() {
-			return nil, nil, fmt.Errorf("insufficient gas ( %d < %d )", tx.Gas(), requiredGas)
+			return sender, hash, 0, fmt.Errorf("insufficient gas ( %d < %d )", tx.Gas(), requiredGas)
 		}
-		h := tx.Hash()
-		return &sender, &h, nil
+
+		if rules.IsPrague {
+			var floorDataGas uint64
+			floorDataGas, err = core.FloorDataGas(tx.Data())
+			if err != nil {
+				return
+			}
+			if tx.Gas() < floorDataGas {
+				return sender, hash, 0, fmt.Errorf("%w: have %d, want %d", core.ErrFloorDataGas, tx.Gas(), floorDataGas)
+			}
+		}
+		hash = tx.Hash()
+		return sender, hash, requiredGas, nil
 	}
-
 	for _, testcase := range []struct {
-		name        string
-		signer      types.Signer
-		fork        ttFork
-		isHomestead bool
-		isIstanbul  bool
+		name    string
+		isMerge bool
 	}{
-		{"Frontier", types.FrontierSigner{}, tt.Frontier, false, false},
-		{"Homestead", types.HomesteadSigner{}, tt.Homestead, true, false},
-		{"EIP150", types.HomesteadSigner{}, tt.EIP150, true, false},
-		{"EIP158", types.NewEIP155Signer(config.ChainID), tt.EIP158, true, false},
-		{"Byzantium", types.NewEIP155Signer(config.ChainID), tt.Byzantium, true, false},
-		{"Constantinople", types.NewEIP155Signer(config.ChainID), tt.Constantinople, true, false},
-		//TODO! @holiman or @rjl493456442 : enable this after tests have been updated for Istanbul
-		//{"Istanbul", types.NewEIP155Signer(config.ChainID), tt.Istanbul, true, true},
+		{"Frontier", false},
+		{"Homestead", false},
+		{"EIP150", false},
+		{"EIP158", false},
+		{"Byzantium", false},
+		{"Constantinople", false},
+		{"Istanbul", false},
+		{"Berlin", false},
+		{"London", false},
+		{"Paris", true},
+		{"Shanghai", true},
+		{"Cancun", true},
+		{"Prague", true},
 	} {
-		sender, txhash, err := validateTx(tt.RLP, testcase.signer, testcase.isHomestead, testcase.isIstanbul)
-
-		if testcase.fork.Sender == (common.UnprefixedAddress{}) {
-			if err == nil {
-				return fmt.Errorf("Expected error, got none (address %v)[%v]", sender.String(), testcase.name)
+		expected := tt.Result[testcase.name]
+		if expected == nil {
+			continue
+		}
+		config, ok := Forks[testcase.name]
+		if !ok || config == nil {
+			return UnsupportedForkError{Name: testcase.name}
+		}
+		var (
+			rules  = config.Rules(new(big.Int), testcase.isMerge, 0)
+			signer = types.MakeSigner(config, new(big.Int), 0)
+		)
+		sender, hash, gas, err := validateTx(tt.Txbytes, signer, &rules)
+		if err != nil {
+			if expected.Hash != nil {
+				return fmt.Errorf("unexpected error fork %s: %v", testcase.name, err)
 			}
 			continue
 		}
-		// Should resolve the right address
-		if err != nil {
-			return fmt.Errorf("Got error, expected none: %v", err)
+		if expected.Exception != nil {
+			return fmt.Errorf("expected error %v, got none (%v), fork %s", *expected.Exception, err, testcase.name)
 		}
-		if sender == nil {
-			return fmt.Errorf("sender was nil, should be %x", common.Address(testcase.fork.Sender))
+		if common.Hash(*expected.Hash) != hash {
+			return fmt.Errorf("hash mismatch: got %x, want %x", hash, common.Hash(*expected.Hash))
 		}
-		if *sender != common.Address(testcase.fork.Sender) {
-			return fmt.Errorf("Sender mismatch: got %x, want %x", sender, testcase.fork.Sender)
+		if common.Address(*expected.Sender) != sender {
+			return fmt.Errorf("sender mismatch: got %x, want %x", sender, expected.Sender)
 		}
-		if txhash == nil {
-			return fmt.Errorf("txhash was nil, should be %x", common.Hash(testcase.fork.Hash))
-		}
-		if *txhash != common.Hash(testcase.fork.Hash) {
-			return fmt.Errorf("Hash mismatch: got %x, want %x", *txhash, testcase.fork.Hash)
+		if uint64(expected.IntrinsicGas) != gas {
+			return fmt.Errorf("intrinsic gas mismatch: got %d, want %d", gas, uint64(expected.IntrinsicGas))
 		}
 	}
 	return nil

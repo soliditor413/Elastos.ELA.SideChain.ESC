@@ -1,24 +1,24 @@
-// Copyright 2016 The Elastos.ELA.SideChain.ESC Authors
-// This file is part of the Elastos.ELA.SideChain.ESC library.
+// Copyright 2016 The go-ethereum Authors
+// This file is part of the go-ethereum library.
 //
-// The Elastos.ELA.SideChain.ESC library is free software: you can redistribute it and/or modify
+// The go-ethereum library is free software: you can redistribute it and/or modify
 // it under the terms of the GNU Lesser General Public License as published by
 // the Free Software Foundation, either version 3 of the License, or
 // (at your option) any later version.
 //
-// The Elastos.ELA.SideChain.ESC library is distributed in the hope that it will be useful,
+// The go-ethereum library is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
 // MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
 // GNU Lesser General Public License for more details.
 //
 // You should have received a copy of the GNU Lesser General Public License
-// along with the Elastos.ELA.SideChain.ESC library. If not, see <http://www.gnu.org/licenses/>.
+// along with the go-ethereum library. If not, see <http://www.gnu.org/licenses/>.
 
 /*
 Package hexutil implements hex encoding with 0x prefix.
 This encoding is used by the Ethereum RPC API to transport binary data in JSON payloads.
 
-Encoding Rules
+# Encoding Rules
 
 All hex data must have prefix "0x".
 
@@ -34,10 +34,9 @@ import (
 	"encoding/hex"
 	"fmt"
 	"math/big"
+	"math/bits"
 	"strconv"
 )
-
-const uintBits = 32 << (uint64(^uint(0)) >> 63)
 
 // Errors
 var (
@@ -48,7 +47,7 @@ var (
 	ErrEmptyNumber   = &decError{"hex string \"0x\""}
 	ErrLeadingZero   = &decError{"hex number with leading zero digits"}
 	ErrUint64Range   = &decError{"hex number > 64 bits"}
-	ErrUintRange     = &decError{fmt.Sprintf("hex number > %d bits", uintBits)}
+	ErrUintRange     = &decError{fmt.Sprintf("hex number > %d bits", bits.UintSize)}
 	ErrBig256Range   = &decError{"hex number > 256 bits"}
 )
 
@@ -176,13 +175,14 @@ func MustDecodeBig(input string) *big.Int {
 }
 
 // EncodeBig encodes bigint as a hex string with 0x prefix.
-// The sign of the integer is ignored.
 func EncodeBig(bigint *big.Int) string {
-	nbits := bigint.BitLen()
-	if nbits == 0 {
+	if sign := bigint.Sign(); sign == 0 {
 		return "0x0"
+	} else if sign > 0 {
+		return "0x" + bigint.Text(16)
+	} else {
+		return "-0x" + bigint.Text(16)[1:]
 	}
-	return fmt.Sprintf("%#x", bigint)
 }
 
 func has0xPrefix(input string) bool {

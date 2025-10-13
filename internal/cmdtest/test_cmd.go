@@ -1,18 +1,18 @@
-// Copyright 2017 The Elastos.ELA.SideChain.ESC Authors
-// This file is part of the Elastos.ELA.SideChain.ESC library.
+// Copyright 2017 The go-ethereum Authors
+// This file is part of the go-ethereum library.
 //
-// The Elastos.ELA.SideChain.ESC library is free software: you can redistribute it and/or modify
+// The go-ethereum library is free software: you can redistribute it and/or modify
 // it under the terms of the GNU Lesser General Public License as published by
 // the Free Software Foundation, either version 3 of the License, or
 // (at your option) any later version.
 //
-// The Elastos.ELA.SideChain.ESC library is distributed in the hope that it will be useful,
+// The go-ethereum library is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
 // MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
 // GNU Lesser General Public License for more details.
 //
 // You should have received a copy of the GNU Lesser General Public License
-// along with the Elastos.ELA.SideChain.ESC library. If not, see <http://www.gnu.org/licenses/>.
+// along with the go-ethereum library. If not, see <http://www.gnu.org/licenses/>.
 
 package cmdtest
 
@@ -21,18 +21,18 @@ import (
 	"bytes"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"os"
 	"os/exec"
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"text/template"
 	"time"
 
-	"github.com/docker/docker/pkg/reexec"
+	"github.com/elastos/Elastos.ELA.SideChain.ESC/internal/reexec"
 )
 
 func NewTestCmd(t *testing.T, data interface{}) *TestCmd {
@@ -55,10 +55,13 @@ type TestCmd struct {
 	Err error
 }
 
+var id atomic.Int32
+
 // Run exec's the current binary using name as argv[0] which will trigger the
 // reexec init function for that name (e.g. "geth-test" in cmd/geth/run_test.go)
 func (tt *TestCmd) Run(name string, args ...string) {
-	tt.stderr = &testlogger{t: tt.T}
+	id.Add(1)
+	tt.stderr = &testlogger{t: tt.T, name: fmt.Sprintf("%d", id.Load())}
 	tt.cmd = &exec.Cmd{
 		Path:   reexec.Self(),
 		Args:   append([]string{name}, args...),
@@ -77,10 +80,10 @@ func (tt *TestCmd) Run(name string, args ...string) {
 	}
 }
 
-// InputLine writes the given text to the childs stdin.
+// InputLine writes the given text to the child's stdin.
 // This method can also be called from an expect template, e.g.:
 //
-//     geth.expect(`Passphrase: {{.InputLine "password"}}`)
+//	geth.expect(`Passphrase: {{.InputLine "password"}}`)
 func (tt *TestCmd) InputLine(s string) string {
 	io.WriteString(tt.stdin, s+"\n")
 	return ""
@@ -114,6 +117,13 @@ func (tt *TestCmd) Expect(tplsource string) {
 	tt.Logf("Matched stdout text:\n%s", want)
 }
 
+// Output reads all output from stdout, and returns the data.
+func (tt *TestCmd) Output() []byte {
+	var buf []byte
+	tt.withKillTimeout(func() { buf, _ = io.ReadAll(tt.stdout) })
+	return buf
+}
+
 func (tt *TestCmd) matchExactOutput(want []byte) error {
 	buf := make([]byte, len(want))
 	n := 0
@@ -127,12 +137,12 @@ func (tt *TestCmd) matchExactOutput(want []byte) error {
 		// Find the mismatch position.
 		for i := 0; i < n; i++ {
 			if want[i] != buf[i] {
-				return fmt.Errorf("Output mismatch at ◊:\n---------------- (stdout text)\n%s◊%s\n---------------- (expected text)\n%s",
+				return fmt.Errorf("output mismatch at ◊:\n---------------- (stdout text)\n%s◊%s\n---------------- (expected text)\n%s",
 					buf[:i], buf[i:n], want)
 			}
 		}
 		if n < len(want) {
-			return fmt.Errorf("Not enough output, got until ◊:\n---------------- (stdout text)\n%s\n---------------- (expected text)\n%s◊%s",
+			return fmt.Errorf("not enough output, got until ◊:\n---------------- (stdout text)\n%s\n---------------- (expected text)\n%s◊%s",
 				buf, want[:n], want[n:])
 		}
 	}
@@ -171,12 +181,16 @@ func (tt *TestCmd) ExpectRegexp(regex string) (*regexp.Regexp, []string) {
 // ExpectExit expects the child process to exit within 5s without
 // printing any additional text on stdout.
 func (tt *TestCmd) ExpectExit() {
+	var output []byte
 	tt.withKillTimeout(func() {
-		ioutil.ReadAll(tt.stdout)
+		output, _ = io.ReadAll(tt.stdout)
 	})
 	tt.WaitExit()
 	if tt.Cleanup != nil {
 		tt.Cleanup()
+	}
+	if len(output) > 0 {
+		tt.Errorf("Unmatched stdout text:\n%s", output)
 	}
 }
 
@@ -223,7 +237,7 @@ func (tt *TestCmd) Kill() {
 }
 
 func (tt *TestCmd) withKillTimeout(fn func()) {
-	timeout := time.AfterFunc(5*time.Second, func() {
+	timeout := time.AfterFunc(2*time.Minute, func() {
 		tt.Log("killing the child process (timeout)")
 		tt.Kill()
 	})
@@ -234,16 +248,17 @@ func (tt *TestCmd) withKillTimeout(fn func()) {
 // testlogger logs all written lines via t.Log and also
 // collects them for later inspection.
 type testlogger struct {
-	t   *testing.T
-	mu  sync.Mutex
-	buf bytes.Buffer
+	t    *testing.T
+	mu   sync.Mutex
+	buf  bytes.Buffer
+	name string
 }
 
 func (tl *testlogger) Write(b []byte) (n int, err error) {
 	lines := bytes.Split(b, []byte("\n"))
 	for _, line := range lines {
 		if len(line) > 0 {
-			tl.t.Logf("(stderr) %s", line)
+			tl.t.Logf("(stderr:%v) %s", tl.name, line)
 		}
 	}
 	tl.mu.Lock()

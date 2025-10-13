@@ -1,22 +1,23 @@
-// Copyright 2018 The Elastos.ELA.SideChain.ESC Authors
-// This file is part of the Elastos.ELA.SideChain.ESC library.
+// Copyright 2018 The go-ethereum Authors
+// This file is part of the go-ethereum library.
 //
-// The Elastos.ELA.SideChain.ESC library is free software: you can redistribute it and/or modify
+// The go-ethereum library is free software: you can redistribute it and/or modify
 // it under the terms of the GNU Lesser General Public License as published by
 // the Free Software Foundation, either version 3 of the License, or
 // (at your option) any later version.
 //
-// The Elastos.ELA.SideChain.ESC library is distributed in the hope that it will be useful,
+// The go-ethereum library is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
 // MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
 // GNU Lesser General Public License for more details.
 //
 // You should have received a copy of the GNU Lesser General Public License
-// along with the Elastos.ELA.SideChain.ESC library. If not, see <http://www.gnu.org/licenses/>.
+// along with the go-ethereum library. If not, see <http://www.gnu.org/licenses/>.
 
 package netutil
 
 import (
+	"net/netip"
 	"time"
 
 	"github.com/elastos/Elastos.ELA.SideChain.ESC/common/mclock"
@@ -29,14 +30,14 @@ type IPTracker struct {
 	contactWindow   time.Duration
 	minStatements   int
 	clock           mclock.Clock
-	statements      map[string]ipStatement
-	contact         map[string]mclock.AbsTime
+	statements      map[netip.Addr]ipStatement
+	contact         map[netip.Addr]mclock.AbsTime
 	lastStatementGC mclock.AbsTime
 	lastContactGC   mclock.AbsTime
 }
 
 type ipStatement struct {
-	endpoint string
+	endpoint netip.AddrPort
 	time     mclock.AbsTime
 }
 
@@ -51,9 +52,9 @@ func NewIPTracker(window, contactWindow time.Duration, minStatements int) *IPTra
 	return &IPTracker{
 		window:        window,
 		contactWindow: contactWindow,
-		statements:    make(map[string]ipStatement),
+		statements:    make(map[netip.Addr]ipStatement),
 		minStatements: minStatements,
-		contact:       make(map[string]mclock.AbsTime),
+		contact:       make(map[netip.Addr]mclock.AbsTime),
 		clock:         mclock.System{},
 	}
 }
@@ -74,12 +75,15 @@ func (it *IPTracker) PredictFullConeNAT() bool {
 }
 
 // PredictEndpoint returns the current prediction of the external endpoint.
-func (it *IPTracker) PredictEndpoint() string {
+func (it *IPTracker) PredictEndpoint() netip.AddrPort {
 	it.gcStatements(it.clock.Now())
 
 	// The current strategy is simple: find the endpoint with most statements.
-	counts := make(map[string]int)
-	maxcount, max := 0, ""
+	var (
+		counts   = make(map[netip.AddrPort]int, len(it.statements))
+		maxcount int
+		max      netip.AddrPort
+	)
 	for _, s := range it.statements {
 		c := counts[s.endpoint] + 1
 		counts[s.endpoint] = c
@@ -91,7 +95,7 @@ func (it *IPTracker) PredictEndpoint() string {
 }
 
 // AddStatement records that a certain host thinks our external endpoint is the one given.
-func (it *IPTracker) AddStatement(host, endpoint string) {
+func (it *IPTracker) AddStatement(host netip.Addr, endpoint netip.AddrPort) {
 	now := it.clock.Now()
 	it.statements[host] = ipStatement{endpoint, now}
 	if time.Duration(now-it.lastStatementGC) >= it.window {
@@ -101,7 +105,7 @@ func (it *IPTracker) AddStatement(host, endpoint string) {
 
 // AddContact records that a packet containing our endpoint information has been sent to a
 // certain host.
-func (it *IPTracker) AddContact(host string) {
+func (it *IPTracker) AddContact(host netip.Addr) {
 	now := it.clock.Now()
 	it.contact[host] = now
 	if time.Duration(now-it.lastContactGC) >= it.contactWindow {

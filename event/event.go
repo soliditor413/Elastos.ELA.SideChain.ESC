@@ -1,18 +1,18 @@
-// Copyright 2014 The Elastos.ELA.SideChain.ESC Authors
-// This file is part of the Elastos.ELA.SideChain.ESC library.
+// Copyright 2014 The go-ethereum Authors
+// This file is part of the go-ethereum library.
 //
-// The Elastos.ELA.SideChain.ESC library is free software: you can redistribute it and/or modify
+// The go-ethereum library is free software: you can redistribute it and/or modify
 // it under the terms of the GNU Lesser General Public License as published by
 // the Free Software Foundation, either version 3 of the License, or
 // (at your option) any later version.
 //
-// The Elastos.ELA.SideChain.ESC library is distributed in the hope that it will be useful,
+// The go-ethereum library is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
 // MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
 // GNU Lesser General Public License for more details.
 //
 // You should have received a copy of the GNU Lesser General Public License
-// along with the Elastos.ELA.SideChain.ESC library. If not, see <http://www.gnu.org/licenses/>.
+// along with the go-ethereum library. If not, see <http://www.gnu.org/licenses/>.
 
 // Package event deals with subscriptions to real-time events.
 package event
@@ -61,7 +61,7 @@ func (mux *TypeMux) Subscribe(types ...interface{}) *TypeMuxSubscription {
 		close(sub.postC)
 	} else {
 		if mux.subm == nil {
-			mux.subm = make(map[reflect.Type][]*TypeMuxSubscription)
+			mux.subm = make(map[reflect.Type][]*TypeMuxSubscription, len(types))
 		}
 		for _, t := range types {
 			rtyp := reflect.TypeOf(t)
@@ -104,6 +104,7 @@ func (mux *TypeMux) Post(ev interface{}) error {
 // Stop blocks until all current deliveries have finished.
 func (mux *TypeMux) Stop() {
 	mux.mutex.Lock()
+	defer mux.mutex.Unlock()
 	for _, subs := range mux.subm {
 		for _, sub := range subs {
 			sub.closewait()
@@ -111,11 +112,11 @@ func (mux *TypeMux) Stop() {
 	}
 	mux.subm = nil
 	mux.stopped = true
-	mux.mutex.Unlock()
 }
 
 func (mux *TypeMux) del(s *TypeMuxSubscription) {
 	mux.mutex.Lock()
+	defer mux.mutex.Unlock()
 	for typ, subs := range mux.subm {
 		if pos := find(subs, s); pos >= 0 {
 			if len(subs) == 1 {
@@ -125,7 +126,6 @@ func (mux *TypeMux) del(s *TypeMuxSubscription) {
 			}
 		}
 	}
-	s.mux.mutex.Unlock()
 }
 
 func find(slice []*TypeMuxSubscription, item *TypeMuxSubscription) int {
@@ -196,9 +196,9 @@ func (s *TypeMuxSubscription) closewait() {
 	s.closed = true
 
 	s.postMu.Lock()
+	defer s.postMu.Unlock()
 	close(s.postC)
 	s.postC = nil
-	s.postMu.Unlock()
 }
 
 func (s *TypeMuxSubscription) deliver(event *TypeMuxEvent) {

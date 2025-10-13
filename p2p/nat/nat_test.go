@@ -1,25 +1,28 @@
-// Copyright 2015 The Elastos.ELA.SideChain.ESC Authors
-// This file is part of the Elastos.ELA.SideChain.ESC library.
+// Copyright 2015 The go-ethereum Authors
+// This file is part of the go-ethereum library.
 //
-// The Elastos.ELA.SideChain.ESC library is free software: you can redistribute it and/or modify
+// The go-ethereum library is free software: you can redistribute it and/or modify
 // it under the terms of the GNU Lesser General Public License as published by
 // the Free Software Foundation, either version 3 of the License, or
 // (at your option) any later version.
 //
-// The Elastos.ELA.SideChain.ESC library is distributed in the hope that it will be useful,
+// The go-ethereum library is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
 // MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
 // GNU Lesser General Public License for more details.
 //
 // You should have received a copy of the GNU Lesser General Public License
-// along with the Elastos.ELA.SideChain.ESC library. If not, see <http://www.gnu.org/licenses/>.
+// along with the go-ethereum library. If not, see <http://www.gnu.org/licenses/>.
 
 package nat
 
 import (
 	"net"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
 )
 
 // This test checks that autodisc doesn't hang and returns
@@ -59,5 +62,25 @@ func TestAutoDiscRace(t *testing.T) {
 				t.Errorf("result %d: got IP %v, want %v", i, rval.ip, wantIP)
 			}
 		}
+	}
+}
+
+// stun should work well
+func TestParseStun(t *testing.T) {
+	testcases := []struct {
+		natStr string
+		want   *stun
+	}{
+		{"stun", &stun{serverList: strings.Split(stunDefaultServers, "\n")}},
+		{"stun:1.2.3.4:1234", &stun{serverList: []string{"1.2.3.4:1234"}}},
+	}
+
+	for _, tc := range testcases {
+		nat, err := Parse(tc.natStr)
+		if err != nil {
+			t.Errorf("should no err, but get %v", err)
+		}
+		stun := nat.(*stun)
+		assert.Equal(t, stun.serverList, tc.want.serverList)
 	}
 }

@@ -1,23 +1,26 @@
-// Copyright 2014 The Elastos.ELA.SideChain.ESC Authors
-// This file is part of the Elastos.ELA.SideChain.ESC library.
+// Copyright 2014 The go-ethereum Authors
+// This file is part of the go-ethereum library.
 //
-// The Elastos.ELA.SideChain.ESC library is free software: you can redistribute it and/or modify
+// The go-ethereum library is free software: you can redistribute it and/or modify
 // it under the terms of the GNU Lesser General Public License as published by
 // the Free Software Foundation, either version 3 of the License, or
 // (at your option) any later version.
 //
-// The Elastos.ELA.SideChain.ESC library is distributed in the hope that it will be useful,
+// The go-ethereum library is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
 // MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
 // GNU Lesser General Public License for more details.
 //
 // You should have received a copy of the GNU Lesser General Public License
-// along with the Elastos.ELA.SideChain.ESC library. If not, see <http://www.gnu.org/licenses/>.
+// along with the go-ethereum library. If not, see <http://www.gnu.org/licenses/>.
 
 package trie
 
 import (
 	"bytes"
+	crand "crypto/rand"
+	"encoding/hex"
+	"math/rand"
 	"testing"
 )
 
@@ -75,10 +78,49 @@ func TestHexKeybytes(t *testing.T) {
 	}
 }
 
+func TestHexToCompactInPlace(t *testing.T) {
+	for i, key := range []string{
+		"00",
+		"060a040c0f000a090b040803010801010900080d090a0a0d0903000b10",
+		"10",
+	} {
+		hexBytes, _ := hex.DecodeString(key)
+		exp := hexToCompact(hexBytes)
+		got := hexToCompactInPlace(hexBytes)
+		if !bytes.Equal(exp, got) {
+			t.Fatalf("test %d: encoding err\ninp %v\ngot %x\nexp %x\n", i, key, got, exp)
+		}
+	}
+}
+
+func TestHexToCompactInPlaceRandom(t *testing.T) {
+	for i := 0; i < 10000; i++ {
+		l := rand.Intn(128)
+		key := make([]byte, l)
+		crand.Read(key)
+		hexBytes := keybytesToHex(key)
+		hexOrig := []byte(string(hexBytes))
+		exp := hexToCompact(hexBytes)
+		got := hexToCompactInPlace(hexBytes)
+
+		if !bytes.Equal(exp, got) {
+			t.Fatalf("encoding err \ncpt %x\nhex %x\ngot %x\nexp %x\n",
+				key, hexOrig, got, exp)
+		}
+	}
+}
+
 func BenchmarkHexToCompact(b *testing.B) {
 	testBytes := []byte{0, 15, 1, 12, 11, 8, 16 /*term*/}
 	for i := 0; i < b.N; i++ {
 		hexToCompact(testBytes)
+	}
+}
+
+func BenchmarkHexToCompactInPlace(b *testing.B) {
+	testBytes := []byte{0, 15, 1, 12, 11, 8, 16 /*term*/}
+	for i := 0; i < b.N; i++ {
+		hexToCompactInPlace(testBytes)
 	}
 }
 

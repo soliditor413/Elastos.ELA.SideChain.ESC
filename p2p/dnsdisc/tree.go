@@ -1,18 +1,18 @@
-// Copyright 2018 The Elastos.ELA.SideChain.ESC Authors
-// This file is part of the Elastos.ELA.SideChain.ESC library.
+// Copyright 2019 The go-ethereum Authors
+// This file is part of the go-ethereum library.
 //
-// The Elastos.ELA.SideChain.ESC library is free software: you can redistribute it and/or modify
+// The go-ethereum library is free software: you can redistribute it and/or modify
 // it under the terms of the GNU Lesser General Public License as published by
 // the Free Software Foundation, either version 3 of the License, or
 // (at your option) any later version.
 //
-// The Elastos.ELA.SideChain.ESC library is distributed in the hope that it will be useful,
+// The go-ethereum library is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
 // MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
 // GNU Lesser General Public License for more details.
 //
 // You should have received a copy of the GNU Lesser General Public License
-// along with the Elastos.ELA.SideChain.ESC library. If not, see <http://www.gnu.org/licenses/>.
+// along with the go-ethereum library. If not, see <http://www.gnu.org/licenses/>.
 
 package dnsdisc
 
@@ -21,9 +21,10 @@ import (
 	"crypto/ecdsa"
 	"encoding/base32"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
-	"sort"
+	"slices"
 	"strings"
 
 	"github.com/elastos/Elastos.ELA.SideChain.ESC/crypto"
@@ -48,7 +49,7 @@ func (t *Tree) Sign(key *ecdsa.PrivateKey, domain string) (url string, err error
 	}
 	root.sig = sig
 	t.root = &root
-	link := &linkEntry{domain, &key.PublicKey}
+	link := newLinkEntry(domain, &key.PublicKey)
 	return link.String(), nil
 }
 
@@ -113,10 +114,41 @@ func (t *Tree) Nodes() []*enode.Node {
 	return nodes
 }
 
+/*
+We want to keep the UDP size below 512 bytes. The UDP size is roughly:
+UDP length = 8 + UDP payload length ( 229 )
+UPD Payload length:
+  - dns.id 2
+  - dns.flags 2
+  - dns.count.queries 2
+  - dns.count.answers 2
+  - dns.count.auth_rr 2
+  - dns.count.add_rr 2
+  - queries (query-size + 6)
+  - answers :
+  - dns.resp.name 2
+  - dns.resp.type 2
+  - dns.resp.class 2
+  - dns.resp.ttl 4
+  - dns.resp.len 2
+  - dns.txt.length 1
+  - dns.txt resp_data_size
+
+So the total size is roughly a fixed overhead of `39`, and the size of the query (domain
+name) and response. The query size is, for example,
+FVY6INQ6LZ33WLCHO3BPR3FH6Y.snap.mainnet.ethdisco.net (52)
+
+We also have some static data in the response, such as `enrtree-branch:`, and potentially
+splitting the response up with `" "`, leaving us with a size of roughly `400` that we need
+to stay below.
+
+The number `370` is used to have some margin for extra overhead (for example, the dns
+query may be larger - more subdomains).
+*/
 const (
-	hashAbbrev    = 16
-	maxChildren   = 300 / hashAbbrev * (13 / 8)
-	minHashLength = 12
+	hashAbbrevSize = 1 + 16*13/8          // Size of an encoded hash (plus comma)
+	maxChildren    = 370 / hashAbbrevSize // 13 children
+	minHashLength  = 12
 )
 
 // MakeTree creates a tree containing the given nodes and links.
@@ -183,8 +215,8 @@ func (t *Tree) build(entries []entry) entry {
 }
 
 func sortByID(nodes []*enode.Node) []*enode.Node {
-	sort.Slice(nodes, func(i, j int) bool {
-		return bytes.Compare(nodes[i].ID().Bytes(), nodes[j].ID().Bytes()) < 0
+	slices.SortFunc(nodes, func(a, b *enode.Node) int {
+		return bytes.Compare(a.ID().Bytes(), b.ID().Bytes())
 	})
 	return nodes
 }
@@ -209,6 +241,7 @@ type (
 		node *enode.Node
 	}
 	linkEntry struct {
+		str    string
 		domain string
 		pubkey *ecdsa.PublicKey
 	}
@@ -246,7 +279,8 @@ func (e *rootEntry) sigHash() []byte {
 
 func (e *rootEntry) verifySignature(pubkey *ecdsa.PublicKey) bool {
 	sig := e.sig[:crypto.RecoveryIDOffset] // remove recovery id
-	return crypto.VerifySignature(crypto.FromECDSAPub(pubkey), e.sigHash(), sig)
+	enckey := crypto.FromECDSAPub(pubkey)
+	return crypto.VerifySignature(enckey, e.sigHash(), sig)
 }
 
 func (e *branchEntry) String() string {
@@ -258,8 +292,13 @@ func (e *enrEntry) String() string {
 }
 
 func (e *linkEntry) String() string {
-	pubkey := b32format.EncodeToString(crypto.CompressPubkey(e.pubkey))
-	return fmt.Sprintf("%s%s@%s", linkPrefix, pubkey, e.domain)
+	return linkPrefix + e.str
+}
+
+func newLinkEntry(domain string, pubkey *ecdsa.PublicKey) *linkEntry {
+	key := b32format.EncodeToString(crypto.CompressPubkey(pubkey))
+	str := key + "@" + domain
+	return &linkEntry{str, domain, pubkey}
 }
 
 // Entry Parsing
@@ -303,14 +342,14 @@ func parseLinkEntry(e string) (entry, error) {
 
 func parseLink(e string) (*linkEntry, error) {
 	if !strings.HasPrefix(e, linkPrefix) {
-		return nil, fmt.Errorf("wrong/missing scheme 'enrtree' in URL")
+		return nil, errors.New("wrong/missing scheme 'enrtree' in URL")
 	}
 	e = e[len(linkPrefix):]
-	pos := strings.IndexByte(e, '@')
-	if pos == -1 {
+
+	keystring, domain, found := strings.Cut(e, "@")
+	if !found {
 		return nil, entryError{"link", errNoPubkey}
 	}
-	keystring, domain := e[:pos], e[pos+1:]
 	keybytes, err := b32format.DecodeString(keystring)
 	if err != nil {
 		return nil, entryError{"link", errBadPubkey}
@@ -319,7 +358,7 @@ func parseLink(e string) (*linkEntry, error) {
 	if err != nil {
 		return nil, entryError{"link", errBadPubkey}
 	}
-	return &linkEntry{domain, key}, nil
+	return &linkEntry{e, domain, key}, nil
 }
 
 func parseBranch(e string) (entry, error) {

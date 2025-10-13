@@ -1,18 +1,18 @@
-// Copyright 2016 The Elastos.ELA.SideChain.ESC Authors
-// This file is part of the Elastos.ELA.SideChain.ESC library.
+// Copyright 2016 The go-ethereum Authors
+// This file is part of the go-ethereum library.
 //
-// The Elastos.ELA.SideChain.ESC library is free software: you can redistribute it and/or modify
+// The go-ethereum library is free software: you can redistribute it and/or modify
 // it under the terms of the GNU Lesser General Public License as published by
 // the Free Software Foundation, either version 3 of the License, or
 // (at your option) any later version.
 //
-// The Elastos.ELA.SideChain.ESC library is distributed in the hope that it will be useful,
+// The go-ethereum library is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
 // MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
 // GNU Lesser General Public License for more details.
 //
 // You should have received a copy of the GNU Lesser General Public License
-// along with the Elastos.ELA.SideChain.ESC library. If not, see <http://www.gnu.org/licenses/>.
+// along with the go-ethereum library. If not, see <http://www.gnu.org/licenses/>.
 
 package hexutil
 
@@ -23,13 +23,16 @@ import (
 	"math/big"
 	"reflect"
 	"strconv"
+
+	"github.com/holiman/uint256"
 )
 
 var (
-	bytesT  = reflect.TypeOf(Bytes(nil))
-	bigT    = reflect.TypeOf((*Big)(nil))
-	uintT   = reflect.TypeOf(Uint(0))
-	uint64T = reflect.TypeOf(Uint64(0))
+	bytesT  = reflect.TypeFor[Bytes]()
+	bigT    = reflect.TypeFor[*Big]()
+	uintT   = reflect.TypeFor[Uint]()
+	uint64T = reflect.TypeFor[Uint64]()
+	u256T   = reflect.TypeFor[*uint256.Int]()
 )
 
 // Bytes marshals/unmarshals as a JSON string with 0x prefix.
@@ -86,7 +89,7 @@ func (b *Bytes) UnmarshalGraphQL(input interface{}) error {
 		}
 		*b = data
 	default:
-		err = fmt.Errorf("Unexpected type for Bytes: %v", input)
+		err = fmt.Errorf("unexpected type %T for Bytes", input)
 	}
 	return err
 }
@@ -220,9 +223,51 @@ func (b *Big) UnmarshalGraphQL(input interface{}) error {
 		num.SetInt64(int64(input))
 		*b = Big(num)
 	default:
-		err = fmt.Errorf("Unexpected type for BigInt: %v", input)
+		err = fmt.Errorf("unexpected type %T for BigInt", input)
 	}
 	return err
+}
+
+// U256 marshals/unmarshals as a JSON string with 0x prefix.
+// The zero value marshals as "0x0".
+type U256 uint256.Int
+
+// MarshalText implements encoding.TextMarshaler
+func (b U256) MarshalText() ([]byte, error) {
+	u256 := (*uint256.Int)(&b)
+	return []byte(u256.Hex()), nil
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (b *U256) UnmarshalJSON(input []byte) error {
+	// The uint256.Int.UnmarshalJSON method accepts "dec", "0xhex"; we must be
+	// more strict, hence we check string and invoke SetFromHex directly.
+	if !isString(input) {
+		return errNonString(u256T)
+	}
+	// The hex decoder needs to accept empty string ("") as '0', which uint256.Int
+	// would reject.
+	if len(input) == 2 {
+		(*uint256.Int)(b).Clear()
+		return nil
+	}
+	err := (*uint256.Int)(b).SetFromHex(string(input[1 : len(input)-1]))
+	if err != nil {
+		return &json.UnmarshalTypeError{Value: err.Error(), Type: u256T}
+	}
+	return nil
+}
+
+// UnmarshalText implements encoding.TextUnmarshaler
+func (b *U256) UnmarshalText(input []byte) error {
+	// The uint256.Int.UnmarshalText method accepts "dec", "0xhex"; we must be
+	// more strict, hence we check string and invoke SetFromHex directly.
+	return (*uint256.Int)(b).SetFromHex(string(input))
+}
+
+// String returns the hex encoding of b.
+func (b *U256) String() string {
+	return (*uint256.Int)(b).Hex()
 }
 
 // Uint64 marshals/unmarshals as a JSON string with 0x prefix.
@@ -284,7 +329,7 @@ func (b *Uint64) UnmarshalGraphQL(input interface{}) error {
 	case int32:
 		*b = Uint64(input)
 	default:
-		err = fmt.Errorf("Unexpected type for Long: %v", input)
+		err = fmt.Errorf("unexpected type %T for Long", input)
 	}
 	return err
 }

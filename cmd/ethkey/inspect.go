@@ -1,30 +1,30 @@
-// Copyright 2017 The Elastos.ELA.SideChain.ESC Authors
-// This file is part of Elastos.ELA.SideChain.ESC.
+// Copyright 2017 The go-ethereum Authors
+// This file is part of go-ethereum.
 //
-// Elastos.ELA.SideChain.ESC is free software: you can redistribute it and/or modify
+// go-ethereum is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
 // the Free Software Foundation, either version 3 of the License, or
 // (at your option) any later version.
 //
-// Elastos.ELA.SideChain.ESC is distributed in the hope that it will be useful,
+// go-ethereum is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
 // MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
 // GNU General Public License for more details.
 //
 // You should have received a copy of the GNU General Public License
-// along with Elastos.ELA.SideChain.ESC. If not, see <http://www.gnu.org/licenses/>.
+// along with go-ethereum. If not, see <http://www.gnu.org/licenses/>.
 
 package main
 
 import (
 	"encoding/hex"
 	"fmt"
-	"io/ioutil"
+	"os"
 
 	"github.com/elastos/Elastos.ELA.SideChain.ESC/accounts/keystore"
 	"github.com/elastos/Elastos.ELA.SideChain.ESC/cmd/utils"
 	"github.com/elastos/Elastos.ELA.SideChain.ESC/crypto"
-	"gopkg.in/urfave/cli.v1"
+	"github.com/urfave/cli/v2"
 )
 
 type outputInspect struct {
@@ -33,7 +33,14 @@ type outputInspect struct {
 	PrivateKey string
 }
 
-var commandInspect = cli.Command{
+var (
+	privateFlag = &cli.BoolFlag{
+		Name:  "private",
+		Usage: "include the private key in the output",
+	}
+)
+
+var commandInspect = &cli.Command{
 	Name:      "inspect",
 	Usage:     "inspect a keyfile",
 	ArgsUsage: "<keyfile>",
@@ -45,29 +52,26 @@ make sure to use this feature with great caution!`,
 	Flags: []cli.Flag{
 		passphraseFlag,
 		jsonFlag,
-		cli.BoolFlag{
-			Name:  "private",
-			Usage: "include the private key in the output",
-		},
+		privateFlag,
 	},
 	Action: func(ctx *cli.Context) error {
 		keyfilepath := ctx.Args().First()
 
 		// Read key from file.
-		keyjson, err := ioutil.ReadFile(keyfilepath)
+		keyjson, err := os.ReadFile(keyfilepath)
 		if err != nil {
 			utils.Fatalf("Failed to read the keyfile at '%s': %v", keyfilepath, err)
 		}
 
 		// Decrypt key with passphrase.
-		passphrase := getPassphrase(ctx)
+		passphrase := getPassphrase(ctx, false)
 		key, err := keystore.DecryptKey(keyjson, passphrase)
 		if err != nil {
 			utils.Fatalf("Error decrypting key: %v", err)
 		}
 
 		// Output all relevant information we can retrieve.
-		showPrivate := ctx.Bool("private")
+		showPrivate := ctx.Bool(privateFlag.Name)
 		out := outputInspect{
 			Address: key.Address.Hex(),
 			PublicKey: hex.EncodeToString(

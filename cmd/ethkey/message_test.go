@@ -1,40 +1,35 @@
-// Copyright 2018 The Elastos.ELA.SideChain.ESC Authors
-// This file is part of Elastos.ELA.SideChain.ESC.
+// Copyright 2018 The go-ethereum Authors
+// This file is part of go-ethereum.
 //
-// Elastos.ELA.SideChain.ESC is free software: you can redistribute it and/or modify
+// go-ethereum is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
 // the Free Software Foundation, either version 3 of the License, or
 // (at your option) any later version.
 //
-// Elastos.ELA.SideChain.ESC is distributed in the hope that it will be useful,
+// go-ethereum is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
 // MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
 // GNU General Public License for more details.
 //
 // You should have received a copy of the GNU General Public License
-// along with Elastos.ELA.SideChain.ESC. If not, see <http://www.gnu.org/licenses/>.
+// along with go-ethereum. If not, see <http://www.gnu.org/licenses/>.
 
 package main
 
 import (
-	"io/ioutil"
-	"os"
 	"path/filepath"
 	"testing"
 )
 
 func TestMessageSignVerify(t *testing.T) {
-	tmpdir, err := ioutil.TempDir("", "ethkey-test")
-	if err != nil {
-		t.Fatal("Can't create temporary directory:", err)
-	}
-	defer os.RemoveAll(tmpdir)
+	t.Parallel()
+	tmpdir := t.TempDir()
 
 	keyfile := filepath.Join(tmpdir, "the-keyfile")
 	message := "test message"
 
 	// Create the key.
-	generate := runEthkey(t, "generate", keyfile)
+	generate := runEthkey(t, "generate", "--lightkdf", keyfile)
 	generate.Expect(`
 !! Unsupported terminal, password will be echoed.
 Password: {{.InputLine "foobar"}}

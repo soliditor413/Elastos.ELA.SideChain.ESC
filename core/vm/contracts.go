@@ -1,46 +1,46 @@
-// Copyright 2014 The Elastos.ELA.SideChain.ESC Authors
-// This file is part of the Elastos.ELA.SideChain.ESC library.
+// Copyright 2014 The go-ethereum Authors
+// This file is part of the go-ethereum library.
 //
-// The Elastos.ELA.SideChain.ESC library is free software: you can redistribute it and/or modify
+// The go-ethereum library is free software: you can redistribute it and/or modify
 // it under the terms of the GNU Lesser General Public License as published by
 // the Free Software Foundation, either version 3 of the License, or
 // (at your option) any later version.
 //
-// The Elastos.ELA.SideChain.ESC library is distributed in the hope that it will be useful,
+// The go-ethereum library is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
 // MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
 // GNU Lesser General Public License for more details.
 //
 // You should have received a copy of the GNU Lesser General Public License
-// along with the Elastos.ELA.SideChain.ESC library. If not, see <http://www.gnu.org/licenses/>.
+// along with the go-ethereum library. If not, see <http://www.gnu.org/licenses/>.
 
 package vm
 
 import (
-	"bytes"
 	"crypto/sha256"
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"maps"
+	"math"
 	"math/big"
+	"math/bits"
 
-	"github.com/elastos/Elastos.ELA.SideChain.ESC/accounts"
-	"github.com/elastos/Elastos.ELA.SideChain.ESC/accounts/abi"
+	"github.com/consensys/gnark-crypto/ecc"
+	bls12381 "github.com/consensys/gnark-crypto/ecc/bls12-381"
+	"github.com/consensys/gnark-crypto/ecc/bls12-381/fp"
+	"github.com/consensys/gnark-crypto/ecc/bls12-381/fr"
+	patched_big "github.com/ethereum/go-bigmodexpfix/src/math/big"
 	"github.com/elastos/Elastos.ELA.SideChain.ESC/common"
-	"github.com/elastos/Elastos.ELA.SideChain.ESC/common/math"
+	"github.com/elastos/Elastos.ELA.SideChain.ESC/common/bitutil"
+	"github.com/elastos/Elastos.ELA.SideChain.ESC/core/tracing"
 	"github.com/elastos/Elastos.ELA.SideChain.ESC/crypto"
 	"github.com/elastos/Elastos.ELA.SideChain.ESC/crypto/blake2b"
-	"github.com/elastos/Elastos.ELA.SideChain.ESC/crypto/bls12381"
 	"github.com/elastos/Elastos.ELA.SideChain.ESC/crypto/bn256"
-	"github.com/elastos/Elastos.ELA.SideChain.ESC/log"
+	"github.com/elastos/Elastos.ELA.SideChain.ESC/crypto/kzg4844"
+	"github.com/elastos/Elastos.ELA.SideChain.ESC/crypto/secp256r1"
 	"github.com/elastos/Elastos.ELA.SideChain.ESC/params"
-	"github.com/elastos/Elastos.ELA.SideChain.ESC/pledgeBill"
-	"github.com/elastos/Elastos.ELA.SideChain.ESC/spv"
-
-	"github.com/elastos/Elastos.ELA/core/contract"
-	"github.com/elastos/Elastos.ELA/core/contract/program"
-	"github.com/elastos/Elastos.ELA/core/types/payload"
-	elaCrypto "github.com/elastos/Elastos.ELA/crypto"
+	"github.com/holiman/uint256"
 	"golang.org/x/crypto/ripemd160"
 )
 
@@ -50,124 +50,137 @@ import (
 type PrecompiledContract interface {
 	RequiredGas(input []byte) uint64  // RequiredPrice calculates the contract gas use
 	Run(input []byte) ([]byte, error) // Run runs the precompiled contract
+	Name() string
 }
+
+// PrecompiledContracts contains the precompiled contracts supported at the given fork.
+type PrecompiledContracts map[common.Address]PrecompiledContract
 
 // PrecompiledContractsHomestead contains the default set of pre-compiled Ethereum
 // contracts used in the Frontier and Homestead releases.
-var PrecompiledContractsHomestead = map[common.Address]PrecompiledContract{
-	common.BytesToAddress([]byte{1}): &ecrecover{},
-	common.BytesToAddress([]byte{2}): &sha256hash{},
-	common.BytesToAddress([]byte{3}): &ripemd160hash{},
-	common.BytesToAddress([]byte{4}): &dataCopy{},
+var PrecompiledContractsHomestead = PrecompiledContracts{
+	common.BytesToAddress([]byte{0x1}): &ecrecover{},
+	common.BytesToAddress([]byte{0x2}): &sha256hash{},
+	common.BytesToAddress([]byte{0x3}): &ripemd160hash{},
+	common.BytesToAddress([]byte{0x4}): &dataCopy{},
 }
 
 // PrecompiledContractsByzantium contains the default set of pre-compiled Ethereum
 // contracts used in the Byzantium release.
-var PrecompiledContractsByzantium = map[common.Address]PrecompiledContract{
-	common.BytesToAddress([]byte{1}):                           &ecrecover{},
-	common.BytesToAddress([]byte{2}):                           &sha256hash{},
-	common.BytesToAddress([]byte{3}):                           &ripemd160hash{},
-	common.BytesToAddress([]byte{4}):                           &dataCopy{},
-	common.BytesToAddress([]byte{5}):                           &bigModExp{eip2565: false},
-	common.BytesToAddress([]byte{6}):                           &bn256AddByzantium{},
-	common.BytesToAddress([]byte{7}):                           &bn256ScalarMulByzantium{},
-	common.BytesToAddress([]byte{8}):                           &bn256PairingByzantium{},
-	common.BytesToAddress(params.ArbiterAddress.Bytes()):       &arbiters{},
-	common.BytesToAddress(params.P256VerifyAddress.Bytes()):    &p256Verify{},
-	common.BytesToAddress(params.SignatureVerifyByPbk.Bytes()): &pbkVerifySignature{},
-	common.BytesToAddress(params.PledgeBillVerify.Bytes()):     &pledgeBillVerify{},
-	common.BytesToAddress(params.PledgeBillTokenID.Bytes()):    &pledgeBillTokenID{},
+var PrecompiledContractsByzantium = PrecompiledContracts{
+	common.BytesToAddress([]byte{0x1}): &ecrecover{},
+	common.BytesToAddress([]byte{0x2}): &sha256hash{},
+	common.BytesToAddress([]byte{0x3}): &ripemd160hash{},
+	common.BytesToAddress([]byte{0x4}): &dataCopy{},
+	common.BytesToAddress([]byte{0x5}): &bigModExp{eip2565: false, eip7823: false, eip7883: false},
+	common.BytesToAddress([]byte{0x6}): &bn256AddByzantium{},
+	common.BytesToAddress([]byte{0x7}): &bn256ScalarMulByzantium{},
+	common.BytesToAddress([]byte{0x8}): &bn256PairingByzantium{},
 }
 
 // PrecompiledContractsIstanbul contains the default set of pre-compiled Ethereum
 // contracts used in the Istanbul release.
-var PrecompiledContractsIstanbul = map[common.Address]PrecompiledContract{
-	common.BytesToAddress([]byte{1}):                             &ecrecover{},
-	common.BytesToAddress([]byte{2}):                             &sha256hash{},
-	common.BytesToAddress([]byte{3}):                             &ripemd160hash{},
-	common.BytesToAddress([]byte{4}):                             &dataCopy{},
-	common.BytesToAddress([]byte{5}):                             &bigModExp{},
-	common.BytesToAddress([]byte{6}):                             &bn256AddIstanbul{},
-	common.BytesToAddress([]byte{7}):                             &bn256ScalarMulIstanbul{},
-	common.BytesToAddress([]byte{8}):                             &bn256PairingIstanbul{},
-	common.BytesToAddress([]byte{9}):                             &blake2F{},
-	common.BytesToAddress(params.ArbiterAddress.Bytes()):         &arbiters{},
-	common.BytesToAddress(params.P256VerifyAddress.Bytes()):      &p256Verify{},
-	common.BytesToAddress(params.SignatureVerifyByPbk.Bytes()):   &pbkVerifySignature{},
-	common.BytesToAddress(params.PledgeBillVerify.Bytes()):       &pledgeBillVerify{},
-	common.BytesToAddress(params.PledgeBillTokenID.Bytes()):      &pledgeBillTokenID{},
-	common.BytesToAddress(params.PledgeBillTokenDetail.Bytes()):  &pledgeBillTokenDetail{},
-	common.BytesToAddress(params.PledgeBillTokenVersion.Bytes()): &pledgeBillPayloadVersion{},
-}
-
-// PrecompiledContractsBLS contains the set of pre-compiled Ethereum
-// contracts specified in EIP-2537. These are exported for testing purposes.
-var PrecompiledContractsBLS = map[common.Address]PrecompiledContract{
-	common.BytesToAddress([]byte{10}):                            &bls12381G1Add{},
-	common.BytesToAddress([]byte{11}):                            &bls12381G1Mul{},
-	common.BytesToAddress([]byte{12}):                            &bls12381G1MultiExp{},
-	common.BytesToAddress([]byte{13}):                            &bls12381G2Add{},
-	common.BytesToAddress([]byte{14}):                            &bls12381G2Mul{},
-	common.BytesToAddress([]byte{15}):                            &bls12381G2MultiExp{},
-	common.BytesToAddress([]byte{16}):                            &bls12381Pairing{},
-	common.BytesToAddress([]byte{17}):                            &bls12381MapG1{},
-	common.BytesToAddress([]byte{18}):                            &bls12381MapG2{},
-	common.BytesToAddress(params.ArbiterAddress.Bytes()):         &arbiters{},
-	common.BytesToAddress(params.P256VerifyAddress.Bytes()):      &p256Verify{},
-	common.BytesToAddress(params.SignatureVerifyByPbk.Bytes()):   &pbkVerifySignature{},
-	common.BytesToAddress(params.PledgeBillVerify.Bytes()):       &pledgeBillVerify{},
-	common.BytesToAddress(params.PledgeBillTokenID.Bytes()):      &pledgeBillTokenID{},
-	common.BytesToAddress(params.PledgeBillTokenDetail.Bytes()):  &pledgeBillTokenDetail{},
-	common.BytesToAddress(params.PledgeBillTokenVersion.Bytes()): &pledgeBillPayloadVersion{},
+var PrecompiledContractsIstanbul = PrecompiledContracts{
+	common.BytesToAddress([]byte{0x1}): &ecrecover{},
+	common.BytesToAddress([]byte{0x2}): &sha256hash{},
+	common.BytesToAddress([]byte{0x3}): &ripemd160hash{},
+	common.BytesToAddress([]byte{0x4}): &dataCopy{},
+	common.BytesToAddress([]byte{0x5}): &bigModExp{eip2565: false, eip7823: false, eip7883: false},
+	common.BytesToAddress([]byte{0x6}): &bn256AddIstanbul{},
+	common.BytesToAddress([]byte{0x7}): &bn256ScalarMulIstanbul{},
+	common.BytesToAddress([]byte{0x8}): &bn256PairingIstanbul{},
+	common.BytesToAddress([]byte{0x9}): &blake2F{},
 }
 
 // PrecompiledContractsBerlin contains the default set of pre-compiled Ethereum
 // contracts used in the Berlin release.
-var PrecompiledContractsBerlin = map[common.Address]PrecompiledContract{
-	common.BytesToAddress([]byte{1}):                           &ecrecover{},
-	common.BytesToAddress([]byte{2}):                           &sha256hash{},
-	common.BytesToAddress([]byte{3}):                           &ripemd160hash{},
-	common.BytesToAddress([]byte{4}):                           &dataCopy{},
-	common.BytesToAddress([]byte{5}):                           &bigModExp{eip2565: true},
-	common.BytesToAddress([]byte{6}):                           &bn256AddIstanbul{},
-	common.BytesToAddress([]byte{7}):                           &bn256ScalarMulIstanbul{},
-	common.BytesToAddress([]byte{8}):                           &bn256PairingIstanbul{},
-	common.BytesToAddress([]byte{9}):                           &blake2F{},
-	common.BytesToAddress(params.ArbiterAddress.Bytes()):       &arbiters{},
-	common.BytesToAddress(params.P256VerifyAddress.Bytes()):    &p256Verify{},
-	common.BytesToAddress(params.SignatureVerifyByPbk.Bytes()): &pbkVerifySignature{},
-	common.BytesToAddress(params.PledgeBillVerify.Bytes()):     &pledgeBillVerify{},
-	common.BytesToAddress(params.PledgeBillTokenID.Bytes()):    &pledgeBillTokenID{},
-	//before release_v0.2.4.2 is not support this contract
-	// common.BytesToAddress(params.PledgeBillTokenDetail.Bytes()):  &pledgeBillTokenDetail{},
-	// common.BytesToAddress(params.PledgeBillTokenVersion.Bytes()): &pledgeBillPayloadVersion{},
-	common.BytesToAddress(params.GetMainChainBlockByHeight.Bytes()): &getMainChainBlockByHeight{},
-	common.BytesToAddress(params.GetMainChainLatestHeight.Bytes()):  &getMainChainLatestHeight{},
+var PrecompiledContractsBerlin = PrecompiledContracts{
+	common.BytesToAddress([]byte{0x1}): &ecrecover{},
+	common.BytesToAddress([]byte{0x2}): &sha256hash{},
+	common.BytesToAddress([]byte{0x3}): &ripemd160hash{},
+	common.BytesToAddress([]byte{0x4}): &dataCopy{},
+	common.BytesToAddress([]byte{0x5}): &bigModExp{eip2565: true, eip7823: false, eip7883: false},
+	common.BytesToAddress([]byte{0x6}): &bn256AddIstanbul{},
+	common.BytesToAddress([]byte{0x7}): &bn256ScalarMulIstanbul{},
+	common.BytesToAddress([]byte{0x8}): &bn256PairingIstanbul{},
+	common.BytesToAddress([]byte{0x9}): &blake2F{},
 }
 
-var PrecompiledContractsShangHai = map[common.Address]PrecompiledContract{
-	common.BytesToAddress([]byte{1}):                                &ecrecover{},
-	common.BytesToAddress([]byte{2}):                                &sha256hash{},
-	common.BytesToAddress([]byte{3}):                                &ripemd160hash{},
-	common.BytesToAddress([]byte{4}):                                &dataCopy{},
-	common.BytesToAddress([]byte{5}):                                &bigModExp{eip2565: true},
-	common.BytesToAddress([]byte{6}):                                &bn256AddIstanbul{},
-	common.BytesToAddress([]byte{7}):                                &bn256ScalarMulIstanbul{},
-	common.BytesToAddress([]byte{8}):                                &bn256PairingIstanbul{},
-	common.BytesToAddress([]byte{9}):                                &blake2F{},
-	common.BytesToAddress(params.ArbiterAddress.Bytes()):            &arbiters{},
-	common.BytesToAddress(params.P256VerifyAddress.Bytes()):         &p256Verify{},
-	common.BytesToAddress(params.SignatureVerifyByPbk.Bytes()):      &pbkVerifySignature{},
-	common.BytesToAddress(params.PledgeBillVerify.Bytes()):          &pledgeBillVerify{},
-	common.BytesToAddress(params.PledgeBillTokenID.Bytes()):         &pledgeBillTokenID{},
-	common.BytesToAddress(params.PledgeBillTokenDetail.Bytes()):     &pledgeBillTokenDetail{},
-	common.BytesToAddress(params.PledgeBillTokenVersion.Bytes()):    &pledgeBillPayloadVersion{},
-	common.BytesToAddress(params.GetMainChainBlockByHeight.Bytes()): &getMainChainBlockByHeight{},
-	common.BytesToAddress(params.GetMainChainLatestHeight.Bytes()):  &getMainChainLatestHeight{},
+// PrecompiledContractsCancun contains the default set of pre-compiled Ethereum
+// contracts used in the Cancun release.
+var PrecompiledContractsCancun = PrecompiledContracts{
+	common.BytesToAddress([]byte{0x1}): &ecrecover{},
+	common.BytesToAddress([]byte{0x2}): &sha256hash{},
+	common.BytesToAddress([]byte{0x3}): &ripemd160hash{},
+	common.BytesToAddress([]byte{0x4}): &dataCopy{},
+	common.BytesToAddress([]byte{0x5}): &bigModExp{eip2565: true, eip7823: false, eip7883: false},
+	common.BytesToAddress([]byte{0x6}): &bn256AddIstanbul{},
+	common.BytesToAddress([]byte{0x7}): &bn256ScalarMulIstanbul{},
+	common.BytesToAddress([]byte{0x8}): &bn256PairingIstanbul{},
+	common.BytesToAddress([]byte{0x9}): &blake2F{},
+	common.BytesToAddress([]byte{0xa}): &kzgPointEvaluation{},
+}
+
+// PrecompiledContractsPrague contains the set of pre-compiled Ethereum
+// contracts used in the Prague release.
+var PrecompiledContractsPrague = PrecompiledContracts{
+	common.BytesToAddress([]byte{0x01}): &ecrecover{},
+	common.BytesToAddress([]byte{0x02}): &sha256hash{},
+	common.BytesToAddress([]byte{0x03}): &ripemd160hash{},
+	common.BytesToAddress([]byte{0x04}): &dataCopy{},
+	common.BytesToAddress([]byte{0x05}): &bigModExp{eip2565: true, eip7823: false, eip7883: false},
+	common.BytesToAddress([]byte{0x06}): &bn256AddIstanbul{},
+	common.BytesToAddress([]byte{0x07}): &bn256ScalarMulIstanbul{},
+	common.BytesToAddress([]byte{0x08}): &bn256PairingIstanbul{},
+	common.BytesToAddress([]byte{0x09}): &blake2F{},
+	common.BytesToAddress([]byte{0x0a}): &kzgPointEvaluation{},
+	common.BytesToAddress([]byte{0x0b}): &bls12381G1Add{},
+	common.BytesToAddress([]byte{0x0c}): &bls12381G1MultiExp{},
+	common.BytesToAddress([]byte{0x0d}): &bls12381G2Add{},
+	common.BytesToAddress([]byte{0x0e}): &bls12381G2MultiExp{},
+	common.BytesToAddress([]byte{0x0f}): &bls12381Pairing{},
+	common.BytesToAddress([]byte{0x10}): &bls12381MapG1{},
+	common.BytesToAddress([]byte{0x11}): &bls12381MapG2{},
+}
+
+var PrecompiledContractsBLS = PrecompiledContractsPrague
+
+var PrecompiledContractsVerkle = PrecompiledContractsBerlin
+
+// PrecompiledContractsOsaka contains the set of pre-compiled Ethereum
+// contracts used in the Osaka release.
+var PrecompiledContractsOsaka = PrecompiledContracts{
+	common.BytesToAddress([]byte{0x01}): &ecrecover{},
+	common.BytesToAddress([]byte{0x02}): &sha256hash{},
+	common.BytesToAddress([]byte{0x03}): &ripemd160hash{},
+	common.BytesToAddress([]byte{0x04}): &dataCopy{},
+	common.BytesToAddress([]byte{0x05}): &bigModExp{eip2565: true, eip7823: true, eip7883: true},
+	common.BytesToAddress([]byte{0x06}): &bn256AddIstanbul{},
+	common.BytesToAddress([]byte{0x07}): &bn256ScalarMulIstanbul{},
+	common.BytesToAddress([]byte{0x08}): &bn256PairingIstanbul{},
+	common.BytesToAddress([]byte{0x09}): &blake2F{},
+	common.BytesToAddress([]byte{0x0a}): &kzgPointEvaluation{},
+	common.BytesToAddress([]byte{0x0b}): &bls12381G1Add{},
+	common.BytesToAddress([]byte{0x0c}): &bls12381G1MultiExp{},
+	common.BytesToAddress([]byte{0x0d}): &bls12381G2Add{},
+	common.BytesToAddress([]byte{0x0e}): &bls12381G2MultiExp{},
+	common.BytesToAddress([]byte{0x0f}): &bls12381Pairing{},
+	common.BytesToAddress([]byte{0x10}): &bls12381MapG1{},
+	common.BytesToAddress([]byte{0x11}): &bls12381MapG2{},
+
+	common.BytesToAddress([]byte{0x1, 0x00}): &p256Verify{},
+}
+
+// PrecompiledContractsP256Verify contains the precompiled Ethereum
+// contract specified in EIP-7212. This is exported for testing purposes.
+var PrecompiledContractsP256Verify = PrecompiledContracts{
+	common.BytesToAddress([]byte{0x1, 0x00}): &p256Verify{},
 }
 
 var (
-	PrecompiledAddressesShangHai  []common.Address
+	PrecompiledAddressesOsaka     []common.Address
+	PrecompiledAddressesPrague    []common.Address
+	PrecompiledAddressesCancun    []common.Address
 	PrecompiledAddressesBerlin    []common.Address
 	PrecompiledAddressesIstanbul  []common.Address
 	PrecompiledAddressesByzantium []common.Address
@@ -187,16 +200,52 @@ func init() {
 	for k := range PrecompiledContractsBerlin {
 		PrecompiledAddressesBerlin = append(PrecompiledAddressesBerlin, k)
 	}
-	for k := range PrecompiledContractsShangHai {
-		PrecompiledAddressesShangHai = append(PrecompiledAddressesShangHai, k)
+	for k := range PrecompiledContractsCancun {
+		PrecompiledAddressesCancun = append(PrecompiledAddressesCancun, k)
+	}
+	for k := range PrecompiledContractsPrague {
+		PrecompiledAddressesPrague = append(PrecompiledAddressesPrague, k)
+	}
+	for k := range PrecompiledContractsOsaka {
+		PrecompiledAddressesOsaka = append(PrecompiledAddressesOsaka, k)
 	}
 }
 
-// ActivePrecompiles returns the precompiles enabled with the current configuration.
+func activePrecompiledContracts(rules params.Rules) PrecompiledContracts {
+	switch {
+	case rules.IsVerkle:
+		return PrecompiledContractsVerkle
+	case rules.IsOsaka:
+		return PrecompiledContractsOsaka
+	case rules.IsPrague:
+		return PrecompiledContractsPrague
+	case rules.IsCancun:
+		return PrecompiledContractsCancun
+	case rules.IsBerlin:
+		return PrecompiledContractsBerlin
+	case rules.IsIstanbul:
+		return PrecompiledContractsIstanbul
+	case rules.IsByzantium:
+		return PrecompiledContractsByzantium
+	default:
+		return PrecompiledContractsHomestead
+	}
+}
+
+// ActivePrecompiledContracts returns a copy of precompiled contracts enabled with the current configuration.
+func ActivePrecompiledContracts(rules params.Rules) PrecompiledContracts {
+	return maps.Clone(activePrecompiledContracts(rules))
+}
+
+// ActivePrecompiles returns the precompile addresses enabled with the current configuration.
 func ActivePrecompiles(rules params.Rules) []common.Address {
 	switch {
-	case rules.IsShanghai:
-		return PrecompiledAddressesShangHai
+	case rules.IsOsaka:
+		return PrecompiledAddressesOsaka
+	case rules.IsPrague:
+		return PrecompiledAddressesPrague
+	case rules.IsCancun:
+		return PrecompiledAddressesCancun
 	case rules.IsBerlin:
 		return PrecompiledAddressesBerlin
 	case rules.IsIstanbul:
@@ -209,17 +258,24 @@ func ActivePrecompiles(rules params.Rules) []common.Address {
 }
 
 // RunPrecompiledContract runs and evaluates the output of a precompiled contract.
-func RunPrecompiledContract(p PrecompiledContract, input []byte, suppliedGas uint64) (ret []byte, remainingGas uint64, err error) {
+// It returns
+// - the returned bytes,
+// - the _remaining_ gas,
+// - any error that occurred
+func RunPrecompiledContract(p PrecompiledContract, input []byte, suppliedGas uint64, logger *tracing.Hooks) (ret []byte, remainingGas uint64, err error) {
 	gasCost := p.RequiredGas(input)
 	if suppliedGas < gasCost {
 		return nil, 0, ErrOutOfGas
+	}
+	if logger != nil && logger.OnGasChange != nil {
+		logger.OnGasChange(suppliedGas, suppliedGas-gasCost, tracing.GasChangeCallPrecompiledContract)
 	}
 	suppliedGas -= gasCost
 	output, err := p.Run(input)
 	return output, suppliedGas, err
 }
 
-// ECRECOVER implemented as a native contract.
+// ecrecover implemented as a native contract.
 type ecrecover struct{}
 
 func (c *ecrecover) RequiredGas(input []byte) uint64 {
@@ -238,7 +294,7 @@ func (c *ecrecover) Run(input []byte) ([]byte, error) {
 	v := input[63] - 27
 
 	// tighter sig s values input homestead only apply to tx sigs
-	if !allZero(input[32:63]) || !crypto.ValidateSignatureValues(v, r, s, false) {
+	if bitutil.TestBytes(input[32:63]) || !crypto.ValidateSignatureValues(v, r, s, false) {
 		return nil, nil
 	}
 	// We must make sure not to modify the 'input', so placing the 'v' along with
@@ -257,6 +313,10 @@ func (c *ecrecover) Run(input []byte) ([]byte, error) {
 	return common.LeftPadBytes(crypto.Keccak256(pubKey[1:])[12:], 32), nil
 }
 
+func (c *ecrecover) Name() string {
+	return "ECREC"
+}
+
 // SHA256 implemented as a native contract.
 type sha256hash struct{}
 
@@ -270,6 +330,10 @@ func (c *sha256hash) RequiredGas(input []byte) uint64 {
 func (c *sha256hash) Run(input []byte) ([]byte, error) {
 	h := sha256.Sum256(input)
 	return h[:], nil
+}
+
+func (c *sha256hash) Name() string {
+	return "SHA256"
 }
 
 // RIPEMD160 implemented as a native contract.
@@ -288,6 +352,10 @@ func (c *ripemd160hash) Run(input []byte) ([]byte, error) {
 	return common.LeftPadBytes(ripemd.Sum(nil), 32), nil
 }
 
+func (c *ripemd160hash) Name() string {
+	return "RIPEMD160"
+}
+
 // data copy implemented as a native contract.
 type dataCopy struct{}
 
@@ -299,142 +367,264 @@ func (c *dataCopy) RequiredGas(input []byte) uint64 {
 	return uint64(len(input)+31)/32*params.IdentityPerWordGas + params.IdentityBaseGas
 }
 func (c *dataCopy) Run(in []byte) ([]byte, error) {
-	return in, nil
+	return common.CopyBytes(in), nil
+}
+
+func (c *dataCopy) Name() string {
+	return "ID"
 }
 
 // bigModExp implements a native big integer exponential modular operation.
 type bigModExp struct {
 	eip2565 bool
+	eip7823 bool
+	eip7883 bool
 }
 
-var (
-	big0      = big.NewInt(0)
-	big1      = big.NewInt(1)
-	big3      = big.NewInt(3)
-	big4      = big.NewInt(4)
-	big7      = big.NewInt(7)
-	big8      = big.NewInt(8)
-	big16     = big.NewInt(16)
-	big20     = big.NewInt(20)
-	big32     = big.NewInt(32)
-	big64     = big.NewInt(64)
-	big96     = big.NewInt(96)
-	big480    = big.NewInt(480)
-	big1024   = big.NewInt(1024)
-	big3072   = big.NewInt(3072)
-	big199680 = big.NewInt(199680)
-)
+// byzantiumMultComplexity implements the bigModexp multComplexity formula, as defined in EIP-198.
+//
+//	def mult_complexity(x):
+//		if x <= 64: return x ** 2
+//		elif x <= 1024: return x ** 2 // 4 + 96 * x - 3072
+//		else: return x ** 2 // 16 + 480 * x - 199680
+//
+// where is x is max(length_of_MODULUS, length_of_BASE)
+// returns MaxUint64 if an overflow occurred.
+func byzantiumMultComplexity(x uint64) uint64 {
+	switch {
+	case x <= 64:
+		return x * x
+	case x <= 1024:
+		// x^2 / 4 + 96*x - 3072
+		return x*x/4 + 96*x - 3072
 
-// modexpMultComplexity implements bigModexp multComplexity formula, as defined in EIP-198
+	default:
+		// For large x, use uint256 arithmetic to avoid overflow
+		// x^2 / 16 + 480*x - 199680
+
+		// xSqr = x^2 / 16
+		carry, xSqr := bits.Mul64(x, x)
+		if carry != 0 {
+			return math.MaxUint64
+		}
+		xSqr = xSqr >> 4
+
+		// Calculate 480 * x (can't overflow if x^2 didn't overflow)
+		x480 := x * 480
+		// Calculate 480 * x - 199680 (will not underflow, since x > 1024)
+		x480 = x480 - 199680
+
+		// xSqr + x480
+		sum, carry := bits.Add64(xSqr, x480, 0)
+		if carry != 0 {
+			return math.MaxUint64
+		}
+		return sum
+	}
+}
+
+// berlinMultComplexity implements the multiplication complexity formula for Berlin.
 //
 // def mult_complexity(x):
 //
-//	if x <= 64: return x ** 2
-//	elif x <= 1024: return x ** 2 // 4 + 96 * x - 3072
-//	else: return x ** 2 // 16 + 480 * x - 199680
+//	ceiling(x/8)^2
 //
 // where is x is max(length_of_MODULUS, length_of_BASE)
-func modexpMultComplexity(x *big.Int) *big.Int {
-	switch {
-	case x.Cmp(big64) <= 0:
-		x.Mul(x, x) // x ** 2
-	case x.Cmp(big1024) <= 0:
-		// (x ** 2 // 4 ) + ( 96 * x - 3072)
-		x = new(big.Int).Add(
-			new(big.Int).Div(new(big.Int).Mul(x, x), big4),
-			new(big.Int).Sub(new(big.Int).Mul(big96, x), big3072),
-		)
-	default:
-		// (x ** 2 // 16) + (480 * x - 199680)
-		x = new(big.Int).Add(
-			new(big.Int).Div(new(big.Int).Mul(x, x), big16),
-			new(big.Int).Sub(new(big.Int).Mul(big480, x), big199680),
-		)
+func berlinMultComplexity(x uint64) uint64 {
+	// x = (x + 7) / 8
+	x, carry := bits.Add64(x, 7, 0)
+	if carry != 0 {
+		return math.MaxUint64
+	}
+	x /= 8
+
+	// x^2
+	carry, x = bits.Mul64(x, x)
+	if carry != 0 {
+		return math.MaxUint64
 	}
 	return x
 }
 
+// osakaMultComplexity implements the multiplication complexity formula for Osaka.
+//
+// For x <= 32: returns 16
+// For x > 32: returns 2 * ceiling(x/8)^2
+func osakaMultComplexity(x uint64) uint64 {
+	if x <= 32 {
+		return 16
+	}
+	// For x > 32, return 2 * berlinMultComplexity(x)
+	result := berlinMultComplexity(x)
+	carry, result := bits.Mul64(result, 2)
+	if carry != 0 {
+		return math.MaxUint64
+	}
+	return result
+}
+
+// modexpIterationCount calculates the number of iterations for the modexp precompile.
+// This is the adjusted exponent length used in gas calculation.
+func modexpIterationCount(expLen uint64, expHead uint256.Int, multiplier uint64) uint64 {
+	var iterationCount uint64
+
+	// For large exponents (expLen > 32), add (expLen - 32) * multiplier
+	if expLen > 32 {
+		carry, count := bits.Mul64(expLen-32, multiplier)
+		if carry > 0 {
+			return math.MaxUint64
+		}
+		iterationCount = count
+	}
+	// Add the MSB position - 1 if expHead is non-zero
+	if bitLen := expHead.BitLen(); bitLen > 0 {
+		count, carry := bits.Add64(iterationCount, uint64(bitLen-1), 0)
+		if carry > 0 {
+			return math.MaxUint64
+		}
+		iterationCount = count
+	}
+
+	return max(iterationCount, 1)
+}
+
+// byzantiumModexpGas calculates the gas cost for the modexp precompile using Byzantium rules.
+func byzantiumModexpGas(baseLen, expLen, modLen uint64, expHead uint256.Int) uint64 {
+	const (
+		multiplier = 8
+		divisor    = 20
+	)
+
+	maxLen := max(baseLen, modLen)
+	multComplexity := byzantiumMultComplexity(maxLen)
+	if multComplexity == math.MaxUint64 {
+		return math.MaxUint64
+	}
+	iterationCount := modexpIterationCount(expLen, expHead, multiplier)
+
+	// Calculate gas: (multComplexity * iterationCount) / divisor
+	carry, gas := bits.Mul64(iterationCount, multComplexity)
+	gas /= divisor
+	if carry != 0 {
+		return math.MaxUint64
+	}
+	return gas
+}
+
+// berlinModexpGas calculates the gas cost for the modexp precompile using Berlin rules.
+func berlinModexpGas(baseLen, expLen, modLen uint64, expHead uint256.Int) uint64 {
+	const (
+		multiplier = 8
+		divisor    = 3
+		minGas     = 200
+	)
+
+	maxLen := max(baseLen, modLen)
+	multComplexity := berlinMultComplexity(maxLen)
+	if multComplexity == math.MaxUint64 {
+		return math.MaxUint64
+	}
+	iterationCount := modexpIterationCount(expLen, expHead, multiplier)
+
+	// Calculate gas: (multComplexity * iterationCount) / divisor
+	carry, gas := bits.Mul64(iterationCount, multComplexity)
+	gas /= divisor
+	if carry != 0 {
+		return math.MaxUint64
+	}
+	return max(gas, minGas)
+}
+
+// osakaModexpGas calculates the gas cost for the modexp precompile using Osaka rules.
+func osakaModexpGas(baseLen, expLen, modLen uint64, expHead uint256.Int) uint64 {
+	const (
+		multiplier = 16
+		minGas     = 500
+	)
+
+	maxLen := max(baseLen, modLen)
+	multComplexity := osakaMultComplexity(maxLen)
+	if multComplexity == math.MaxUint64 {
+		return math.MaxUint64
+	}
+	iterationCount := modexpIterationCount(expLen, expHead, multiplier)
+
+	// Calculate gas: multComplexity * iterationCount
+	carry, gas := bits.Mul64(iterationCount, multComplexity)
+	if carry != 0 {
+		return math.MaxUint64
+	}
+	return max(gas, minGas)
+}
+
 // RequiredGas returns the gas required to execute the pre-compiled contract.
 func (c *bigModExp) RequiredGas(input []byte) uint64 {
-	var (
-		baseLen = new(big.Int).SetBytes(getData(input, 0, 32))
-		expLen  = new(big.Int).SetBytes(getData(input, 32, 32))
-		modLen  = new(big.Int).SetBytes(getData(input, 64, 32))
-	)
+	// Parse input lengths
+	baseLenBig := new(uint256.Int).SetBytes(getData(input, 0, 32))
+	expLenBig := new(uint256.Int).SetBytes(getData(input, 32, 32))
+	modLenBig := new(uint256.Int).SetBytes(getData(input, 64, 32))
+
+	// Convert to uint64, capping at max value
+	baseLen := baseLenBig.Uint64()
+	if !baseLenBig.IsUint64() {
+		baseLen = math.MaxUint64
+	}
+	expLen := expLenBig.Uint64()
+	if !expLenBig.IsUint64() {
+		expLen = math.MaxUint64
+	}
+	modLen := modLenBig.Uint64()
+	if !modLenBig.IsUint64() {
+		modLen = math.MaxUint64
+	}
+
+	// Skip the header
 	if len(input) > 96 {
 		input = input[96:]
 	} else {
 		input = input[:0]
 	}
+
 	// Retrieve the head 32 bytes of exp for the adjusted exponent length
-	var expHead *big.Int
-	if big.NewInt(int64(len(input))).Cmp(baseLen) <= 0 {
-		expHead = new(big.Int)
-	} else {
-		if expLen.Cmp(big32) > 0 {
-			expHead = new(big.Int).SetBytes(getData(input, baseLen.Uint64(), 32))
+	var expHead uint256.Int
+	if uint64(len(input)) > baseLen {
+		if expLen > 32 {
+			expHead.SetBytes(getData(input, baseLen, 32))
 		} else {
-			expHead = new(big.Int).SetBytes(getData(input, baseLen.Uint64(), expLen.Uint64()))
+			// TODO: Check that if expLen < baseLen, then getData will return an empty slice
+			expHead.SetBytes(getData(input, baseLen, expLen))
 		}
 	}
-	// Calculate the adjusted exponent length
-	var msb int
-	if bitlen := expHead.BitLen(); bitlen > 0 {
-		msb = bitlen - 1
-	}
-	adjExpLen := new(big.Int)
-	if expLen.Cmp(big32) > 0 {
-		adjExpLen.Sub(expLen, big32)
-		adjExpLen.Mul(big8, adjExpLen)
-	}
-	adjExpLen.Add(adjExpLen, big.NewInt(int64(msb)))
-	// Calculate the gas cost of the operation
-	gas := new(big.Int).Set(math.BigMax(modLen, baseLen))
-	if c.eip2565 {
-		// EIP-2565 has three changes
-		// 1. Different multComplexity (inlined here)
-		// in EIP-2565 (https://eips.ethereum.org/EIPS/eip-2565):
-		//
-		// def mult_complexity(x):
-		//    ceiling(x/8)^2
-		//
-		//where is x is max(length_of_MODULUS, length_of_BASE)
-		gas = gas.Add(gas, big7)
-		gas = gas.Div(gas, big8)
-		gas.Mul(gas, gas)
 
-		gas.Mul(gas, math.BigMax(adjExpLen, big1))
-		// 2. Different divisor (`GQUADDIVISOR`) (3)
-		gas.Div(gas, big3)
-		if gas.BitLen() > 64 {
-			return math.MaxUint64
-		}
-		// 3. Minimum price of 200 gas
-		if gas.Uint64() < 200 {
-			return 200
-		}
-		return gas.Uint64()
+	// Choose the appropriate gas calculation based on the EIP flags
+	if c.eip7883 {
+		return osakaModexpGas(baseLen, expLen, modLen, expHead)
+	} else if c.eip2565 {
+		return berlinModexpGas(baseLen, expLen, modLen, expHead)
+	} else {
+		return byzantiumModexpGas(baseLen, expLen, modLen, expHead)
 	}
-	gas = modexpMultComplexity(gas)
-	gas.Mul(gas, math.BigMax(adjExpLen, big1))
-	gas.Div(gas, big20)
-
-	if gas.BitLen() > 64 {
-		return math.MaxUint64
-	}
-	return gas.Uint64()
 }
 
 func (c *bigModExp) Run(input []byte) ([]byte, error) {
 	var (
-		baseLen = new(big.Int).SetBytes(getData(input, 0, 32)).Uint64()
-		expLen  = new(big.Int).SetBytes(getData(input, 32, 32)).Uint64()
-		modLen  = new(big.Int).SetBytes(getData(input, 64, 32)).Uint64()
+		baseLenBig       = new(big.Int).SetBytes(getData(input, 0, 32))
+		expLenBig        = new(big.Int).SetBytes(getData(input, 32, 32))
+		modLenBig        = new(big.Int).SetBytes(getData(input, 64, 32))
+		baseLen          = baseLenBig.Uint64()
+		expLen           = expLenBig.Uint64()
+		modLen           = modLenBig.Uint64()
+		inputLenOverflow = max(baseLenBig.BitLen(), expLenBig.BitLen(), modLenBig.BitLen()) > 64
 	)
 	if len(input) > 96 {
 		input = input[96:]
 	} else {
 		input = input[:0]
+	}
+
+	// enforce size cap for inputs
+	if c.eip7823 && (inputLenOverflow || max(baseLen, expLen, modLen) > 1024) {
+		return nil, errors.New("one or more of base/exponent/modulus length exceeded 1024 bytes")
 	}
 	// Handle a special case when both the base and mod length is zero
 	if baseLen == 0 && modLen == 0 {
@@ -442,15 +632,26 @@ func (c *bigModExp) Run(input []byte) ([]byte, error) {
 	}
 	// Retrieve the operands and execute the exponentiation
 	var (
-		base = new(big.Int).SetBytes(getData(input, 0, baseLen))
-		exp  = new(big.Int).SetBytes(getData(input, baseLen, expLen))
-		mod  = new(big.Int).SetBytes(getData(input, baseLen+expLen, modLen))
+		base = new(patched_big.Int).SetBytes(getData(input, 0, baseLen))
+		exp  = new(patched_big.Int).SetBytes(getData(input, baseLen, expLen))
+		mod  = new(patched_big.Int).SetBytes(getData(input, baseLen+expLen, modLen))
+		v    []byte
 	)
-	if mod.BitLen() == 0 {
+	switch {
+	case mod.BitLen() == 0:
 		// Modulo 0 is undefined, return zero
 		return common.LeftPadBytes([]byte{}, int(modLen)), nil
+	case base.BitLen() == 1: // a bit length of 1 means it's 1 (or -1).
+		//If base == 1, then we can just return base % mod (if mod >= 1, which it is)
+		v = base.Mod(base, mod).Bytes()
+	default:
+		v = base.Exp(base, exp, mod).Bytes()
 	}
-	return common.LeftPadBytes(base.Exp(base, exp, mod).Bytes(), int(modLen)), nil
+	return common.LeftPadBytes(v, int(modLen)), nil
+}
+
+func (c *bigModExp) Name() string {
+	return "MODEXP"
 }
 
 // newCurvePoint unmarshals a binary blob into a bn256 elliptic curve point,
@@ -489,7 +690,7 @@ func runBn256Add(input []byte) ([]byte, error) {
 	return res.Marshal(), nil
 }
 
-// bn256Add implements a native elliptic curve point addition conforming to
+// bn256AddIstanbul implements a native elliptic curve point addition conforming to
 // Istanbul consensus rules.
 type bn256AddIstanbul struct{}
 
@@ -500,6 +701,10 @@ func (c *bn256AddIstanbul) RequiredGas(input []byte) uint64 {
 
 func (c *bn256AddIstanbul) Run(input []byte) ([]byte, error) {
 	return runBn256Add(input)
+}
+
+func (c *bn256AddIstanbul) Name() string {
+	return "BN254_ADD"
 }
 
 // bn256AddByzantium implements a native elliptic curve point addition
@@ -513,6 +718,10 @@ func (c *bn256AddByzantium) RequiredGas(input []byte) uint64 {
 
 func (c *bn256AddByzantium) Run(input []byte) ([]byte, error) {
 	return runBn256Add(input)
+}
+
+func (c *bn256AddByzantium) Name() string {
+	return "BN254_ADD"
 }
 
 // runBn256ScalarMul implements the Bn256ScalarMul precompile, referenced by
@@ -540,6 +749,10 @@ func (c *bn256ScalarMulIstanbul) Run(input []byte) ([]byte, error) {
 	return runBn256ScalarMul(input)
 }
 
+func (c *bn256ScalarMulIstanbul) Name() string {
+	return "BN254_MUL"
+}
+
 // bn256ScalarMulByzantium implements a native elliptic curve scalar
 // multiplication conforming to Byzantium consensus rules.
 type bn256ScalarMulByzantium struct{}
@@ -551,6 +764,10 @@ func (c *bn256ScalarMulByzantium) RequiredGas(input []byte) uint64 {
 
 func (c *bn256ScalarMulByzantium) Run(input []byte) ([]byte, error) {
 	return runBn256ScalarMul(input)
+}
+
+func (c *bn256ScalarMulByzantium) Name() string {
+	return "BN254_MUL"
 }
 
 var (
@@ -608,6 +825,10 @@ func (c *bn256PairingIstanbul) Run(input []byte) ([]byte, error) {
 	return runBn256Pairing(input)
 }
 
+func (c *bn256PairingIstanbul) Name() string {
+	return "BN254_PAIRING"
+}
+
 // bn256PairingByzantium implements a pairing pre-compile for the bn256 curve
 // conforming to Byzantium consensus rules.
 type bn256PairingByzantium struct{}
@@ -619,6 +840,10 @@ func (c *bn256PairingByzantium) RequiredGas(input []byte) uint64 {
 
 func (c *bn256PairingByzantium) Run(input []byte) ([]byte, error) {
 	return runBn256Pairing(input)
+}
+
+func (c *bn256PairingByzantium) Name() string {
+	return "BN254_PAIRING"
 }
 
 type blake2F struct{}
@@ -644,7 +869,7 @@ var (
 )
 
 func (c *blake2F) Run(input []byte) ([]byte, error) {
-	// Make sure the input is valid (correct lenth and final flag)
+	// Make sure the input is valid (correct length and final flag)
 	if len(input) != blake2FInputLength {
 		return nil, errBlake2FInvalidInputLength
 	}
@@ -654,7 +879,7 @@ func (c *blake2F) Run(input []byte) ([]byte, error) {
 	// Parse the input into the Blake2b call parameters
 	var (
 		rounds = binary.BigEndian.Uint32(input[0:4])
-		final  = (input[212] == blake2FFinalBlockBytes)
+		final  = input[212] == blake2FFinalBlockBytes
 
 		h [8]uint64
 		m [16]uint64
@@ -682,308 +907,8 @@ func (c *blake2F) Run(input []byte) ([]byte, error) {
 	return output, nil
 }
 
-var (
-	errGettingArbitersFailed = errors.New("getting arbiters failed")
-)
-
-type arbiters struct{}
-
-func (c *arbiters) RequiredGas(input []byte) uint64 {
-	return params.ArbitersBaseGas
-}
-
-func (c *arbiters) Run(input []byte) ([]byte, error) {
-	arbiters, _, err := spv.GetArbiters()
-	if err != nil {
-		return nil, errGettingArbitersFailed
-	}
-	ret := make([]byte, 0)
-	for _, pubkey := range arbiters {
-		hash := crypto.Keccak256(common.Hex2Bytes(pubkey))
-		ret = append(ret, common.LeftPadBytes(hash[:], 32)...)
-	}
-
-	return ret, nil
-}
-
-const (
-	p256VerifyInputLength = 193
-)
-
-var (
-	errP256VerifyInvalidInputLength = errors.New("invalid input length")
-	errP256VerifyInvalidPublicKey   = errors.New("invalid public key")
-)
-
-type p256Verify struct{}
-
-func (c *p256Verify) RequiredGas(input []byte) uint64 {
-	return params.P256VerifyBaseGas
-}
-
-func (c *p256Verify) Run(input []byte) ([]byte, error) {
-	// Make sure the input is valid (correct length)
-	if len(input) != p256VerifyInputLength {
-		return nil, errP256VerifyInvalidInputLength
-	}
-	//length := getData(input, 0, 32)
-	pubkey := getData(input, 32, 33)
-	data := getData(input, 65, 64)
-	sig := getData(input, 129, 64)
-	publicKey, err := elaCrypto.DecodePoint(pubkey)
-	if err != nil {
-		return nil, errP256VerifyInvalidPublicKey
-	}
-	err = elaCrypto.Verify(*publicKey, data, sig)
-	if err != nil {
-		return false32Byte, nil
-	}
-	return true32Byte, nil
-}
-
-type pbkVerifySignature struct{}
-
-func (b *pbkVerifySignature) RequiredGas(input []byte) uint64 {
-	return params.PbkVerifySignature
-}
-
-func (b *pbkVerifySignature) Run(input []byte) ([]byte, error) {
-	//length := getData(input, 0, 32)
-	pubkey := getData(input, 32, 33)
-	digest := getData(input, 65, 32)
-	sig := getData(input, 97, 65)
-	digest = accounts.TextHash(digest)
-
-	if sig[crypto.RecoveryIDOffset] >= 27 {
-		sig[crypto.RecoveryIDOffset] -= 27
-	}
-	signerPuk, err := crypto.SigToPub(digest, sig)
-	if err != nil {
-		fmt.Println("SigToPub error", signerPuk, err)
-		return false32Byte, err
-	}
-	pubkeyBytes := crypto.CompressPubkey(signerPuk)
-
-	if bytes.Equal(pubkeyBytes, pubkey) {
-		return true32Byte, nil
-	}
-	return false32Byte, nil
-}
-
-type pledgeBillVerify struct{}
-
-func (b *pledgeBillVerify) RequiredGas(input []byte) uint64 {
-	return params.PledgeBillVerifyGas
-}
-
-func (b *pledgeBillVerify) Run(input []byte) ([]byte, error) {
-	elaHash := getData(input, 32, 32)
-	toAddress := getData(input, 64, 20)
-	toAddress = toAddress[:common.AddressLength]
-	multiN := getData(input, 84, 32)
-	multiM := getData(input, 116, 32)
-	sigLen := getData(input, 148, 32)
-	var startPoint int64 = 180
-	var i int64
-	n := big.NewInt(0).SetBytes(multiN)
-	m := big.NewInt(0).SetBytes(multiM)
-	publickeys := make([]*elaCrypto.PublicKey, 0)
-	var point uint64
-	for i = 0; i < n.Int64(); i++ {
-		point = uint64(startPoint + (i * 33))
-		pub := getData(input, point, 33)
-		pbk, err := elaCrypto.DecodePoint(pub)
-		if err != nil {
-			return false32Byte, errors.New("publicKey decode error")
-		}
-		publickeys = append(publickeys, pbk)
-
-	}
-	point = point + 33
-	signatures := make([]byte, 0)
-
-	if n.Int64() == 1 {
-		signature := getData(input, point, 64)
-		err := checkStandardSignature(publickeys[0], elaHash, toAddress, signature)
-		if err != nil {
-			log.Error("checkStandardSignature failed", "err", err)
-			return false32Byte, err
-		}
-	} else if m.Uint64() > 1 && n.Uint64() > 1 {
-		sigCount := big.NewInt(0).SetBytes(sigLen)
-		for i = 0; i < sigCount.Int64(); i++ {
-			c := point + (uint64(i) * 64)
-			signature := getData(input, c, 64)
-			signatures = append(signatures, getParameterBySignature(signature)...)
-		}
-		if n.Cmp(m) < 0 {
-			return false32Byte, errors.New("n is smaller than m")
-		}
-		err := checkMultiSignatures(int(m.Int64()), publickeys, signatures, elaHash, toAddress)
-		if err != nil {
-			log.Error("checkMultiSignatures failed", "err", err)
-			return false32Byte, err
-		}
-	} else {
-		return false32Byte, errors.New("error signature params")
-	}
-	return true32Byte, nil
-}
-
-func getParameterBySignature(signature []byte) []byte {
-	buf := new(bytes.Buffer)
-	buf.WriteByte(byte(len(signature)))
-	buf.Write(signature)
-	return buf.Bytes()
-}
-
-func checkStandardSignature(pubKey *elaCrypto.PublicKey, elaHash []byte, toAddress []byte, signature []byte) error {
-	data := append(elaHash, toAddress...)
-	err := elaCrypto.Verify(*pubKey, data, signature)
-	if err != nil {
-		return err
-	}
-	redeemScript, err := contract.CreateStandardRedeemScript(pubKey)
-	if err != nil {
-		return err
-	}
-	ct, err := contract.CreateStakeContractByCode(redeemScript[:])
-	if err != nil {
-		return err
-	}
-	stakeAddress, err := ct.ToProgramHash().ToAddress()
-
-	sAddress, _, err := pledgeBill.GetPledgeBillData(common.BytesToHash(elaHash).String())
-	if err != nil {
-		log.Info("general stakeAddress", "", stakeAddress)
-		return err
-	}
-	if sAddress != stakeAddress {
-		return errors.New(fmt.Sprintf("stakeAddress is not correct, spv sAddress%s, callSaddress:%s", sAddress, stakeAddress))
-	}
-	return nil
-}
-
-func checkMultiSignatures(m int, publickeys []*elaCrypto.PublicKey, signatures []byte, elaHash []byte, toAddress []byte) error {
-	ct, err := contract.CreateMultiSigContract(m, publickeys)
-	if err != nil {
-		return err
-	}
-	pro := program.Program{
-		Code:      ct.Code,
-		Parameter: signatures,
-	}
-	data := append(elaHash, toAddress...)
-	err = elaCrypto.CheckMultiSigSignatures(pro, data)
-	if err != nil {
-		return err
-	}
-	ct.Prefix = contract.PrefixDPoSV2
-	stakeAddress, err := ct.ToProgramHash().ToAddress()
-	if err != nil {
-		return err
-	}
-	sAddress, _, err := pledgeBill.GetPledgeBillData(common.BytesToHash(elaHash).String())
-	if sAddress != stakeAddress {
-		return errors.New(fmt.Sprintf("stakeAddress is not correct, spv sAddress%s, callSaddress:%s", sAddress, stakeAddress))
-	}
-	return nil
-}
-
-type pledgeBillTokenID struct{}
-
-func (b *pledgeBillTokenID) RequiredGas(input []byte) uint64 {
-	return params.GetPledgeBillTokenID
-}
-
-func (b *pledgeBillTokenID) Run(input []byte) ([]byte, error) {
-	//length := getData(input, 0, 32)
-	elaHash := getData(input, 32, 32)
-
-	_, tokenID, err := pledgeBill.GetPledgeBillData(common.BytesToHash(elaHash).String())
-	if err != nil {
-		log.Info("pledgeBillTokenID", "elaHash", elaHash, "hash", common.BytesToHash(elaHash).String(), "tokenID", tokenID)
-		return false32Byte, err
-	}
-	return tokenID.Bytes(), nil
-}
-
-type pledgeBillTokenDetail struct{}
-
-func (p *pledgeBillTokenDetail) RequiredGas(input []byte) uint64 {
-	return params.GetPledgeBillTokenDetail
-}
-
-func (p *pledgeBillTokenDetail) Run(input []byte) ([]byte, error) {
-	//length := getData(input, 0, 32)
-	elaHash := getData(input, 32, 32)
-	nftPayload, payloadVersion, err := pledgeBill.GetCreateNFTPayload(common.BytesToHash(elaHash).String())
-	if err != nil {
-		log.Info("pledgeBillTokenDetail", "elaHash", elaHash, "hash", common.BytesToHash(elaHash).String())
-		return false32Byte, err
-	}
-
-	if payloadVersion == payload.CreateNFTVersion {
-		nftPayload.StartHeight = 0
-		nftPayload.EndHeight = 0
-		nftPayload.Votes = 0
-		nftPayload.VoteRights = 0
-		nftPayload.TargetOwnerKey = []byte{}
-	}
-	arguments := make([]abi.Argument, 0)
-	Bytes32, _ := abi.NewType("bytes32", "bytes32", nil)
-	UInt32, _ := abi.NewType("uint32", "uint32", nil)
-	Int64, _ := abi.NewType("int64", "int64", nil)
-	String, _ := abi.NewType("string", "string", nil)
-	Bytes, _ := abi.NewType("bytes", "bytes", nil)
-
-	Referkey := abi.Argument{Name: "referKey", Type: Bytes32}
-	arguments = append(arguments, Referkey)
-
-	StakeAddress := abi.Argument{Name: "stakeAddress", Type: String}
-	arguments = append(arguments, StakeAddress)
-
-	GenesisBlockHash := abi.Argument{Name: "genesisBlockHash", Type: Bytes32}
-	arguments = append(arguments, GenesisBlockHash)
-
-	StartHeight := abi.Argument{Name: "startHeight", Type: UInt32}
-	arguments = append(arguments, StartHeight)
-
-	EndHeight := abi.Argument{Name: "endHeight", Type: UInt32}
-	arguments = append(arguments, EndHeight)
-
-	Votes := abi.Argument{Name: "votes", Type: Int64}
-	arguments = append(arguments, Votes)
-
-	VotesRight := abi.Argument{Name: "votesRight", Type: Int64}
-	arguments = append(arguments, VotesRight)
-
-	Owner := abi.Argument{Name: "targetOwner", Type: Bytes}
-	arguments = append(arguments, Owner)
-
-	m := abi.Method{Inputs: arguments}
-	ret, err := m.Inputs.Pack(nftPayload.ReferKey, nftPayload.StakeAddress, nftPayload.GenesisBlockHash, nftPayload.StartHeight, nftPayload.EndHeight, nftPayload.Votes, nftPayload.VoteRights, nftPayload.TargetOwnerKey[:])
-	if err != nil {
-		log.Error("pledgeBillTokenDetail ailed ", "error ", err)
-		return ret, err
-	}
-	return ret, nil
-}
-
-type pledgeBillPayloadVersion struct{}
-
-func (p *pledgeBillPayloadVersion) RequiredGas(input []byte) uint64 {
-	return params.GetPledgeBillTokenID
-}
-
-func (p *pledgeBillPayloadVersion) Run(input []byte) ([]byte, error) {
-	elaHash := getData(input, 32, 32)
-	v, err := pledgeBill.GetBPosNftPayloadVersion(common.BytesToHash(elaHash).String())
-	version := big.NewInt(int64(v))
-	if err != nil {
-		log.Warn("GetBPosNftPayloadVerson failed", "error", err)
-	}
-	return common.LeftPadBytes(version.Bytes(), 32), err
+func (c *blake2F) Name() string {
+	return "BLAKE2F"
 }
 
 var (
@@ -1009,62 +934,28 @@ func (c *bls12381G1Add) Run(input []byte) ([]byte, error) {
 		return nil, errBLS12381InvalidInputLength
 	}
 	var err error
-	var p0, p1 *bls12381.PointG1
-
-	// Initialize G1
-	g := bls12381.NewG1()
+	var p0, p1 *bls12381.G1Affine
 
 	// Decode G1 point p_0
-	if p0, err = g.DecodePoint(input[:128]); err != nil {
+	if p0, err = decodePointG1(input[:128]); err != nil {
 		return nil, err
 	}
 	// Decode G1 point p_1
-	if p1, err = g.DecodePoint(input[128:]); err != nil {
+	if p1, err = decodePointG1(input[128:]); err != nil {
 		return nil, err
 	}
+
+	// No need to check the subgroup here, as specified by EIP-2537
 
 	// Compute r = p_0 + p_1
-	r := g.New()
-	g.Add(r, p0, p1)
+	p0.Add(p0, p1)
 
 	// Encode the G1 point result into 128 bytes
-	return g.EncodePoint(r), nil
+	return encodePointG1(p0), nil
 }
 
-// bls12381G1Mul implements EIP-2537 G1Mul precompile.
-type bls12381G1Mul struct{}
-
-// RequiredGas returns the gas required to execute the pre-compiled contract.
-func (c *bls12381G1Mul) RequiredGas(input []byte) uint64 {
-	return params.Bls12381G1MulGas
-}
-
-func (c *bls12381G1Mul) Run(input []byte) ([]byte, error) {
-	// Implements EIP-2537 G1Mul precompile.
-	// > G1 multiplication call expects `160` bytes as an input that is interpreted as byte concatenation of encoding of G1 point (`128` bytes) and encoding of a scalar value (`32` bytes).
-	// > Output is an encoding of multiplication operation result - single G1 point (`128` bytes).
-	if len(input) != 160 {
-		return nil, errBLS12381InvalidInputLength
-	}
-	var err error
-	var p0 *bls12381.PointG1
-
-	// Initialize G1
-	g := bls12381.NewG1()
-
-	// Decode G1 point
-	if p0, err = g.DecodePoint(input[:128]); err != nil {
-		return nil, err
-	}
-	// Decode scalar value
-	e := new(big.Int).SetBytes(input[128:])
-
-	// Compute r = e * p_0
-	r := g.New()
-	g.MulScalar(r, p0, e)
-
-	// Encode the G1 point into 128 bytes
-	return g.EncodePoint(r), nil
+func (c *bls12381G1Add) Name() string {
+	return "BLS12_G1ADD"
 }
 
 // bls12381G1MultiExp implements EIP-2537 G1MultiExp precompile.
@@ -1080,10 +971,10 @@ func (c *bls12381G1MultiExp) RequiredGas(input []byte) uint64 {
 	}
 	// Lookup discount value for G1 point, scalar value pair length
 	var discount uint64
-	if dLen := len(params.Bls12381MultiExpDiscountTable); k < dLen {
-		discount = params.Bls12381MultiExpDiscountTable[k-1]
+	if dLen := len(params.Bls12381G1MultiExpDiscountTable); k < dLen {
+		discount = params.Bls12381G1MultiExpDiscountTable[k-1]
 	} else {
-		discount = params.Bls12381MultiExpDiscountTable[dLen-1]
+		discount = params.Bls12381G1MultiExpDiscountTable[dLen-1]
 	}
 	// Calculate gas and return the result
 	return (uint64(k) * params.Bls12381G1MulGas * discount) / 1000
@@ -1097,31 +988,38 @@ func (c *bls12381G1MultiExp) Run(input []byte) ([]byte, error) {
 	if len(input) == 0 || len(input)%160 != 0 {
 		return nil, errBLS12381InvalidInputLength
 	}
-	var err error
-	points := make([]*bls12381.PointG1, k)
-	scalars := make([]*big.Int, k)
-
-	// Initialize G1
-	g := bls12381.NewG1()
+	points := make([]bls12381.G1Affine, k)
+	scalars := make([]fr.Element, k)
 
 	// Decode point scalar pairs
 	for i := 0; i < k; i++ {
 		off := 160 * i
 		t0, t1, t2 := off, off+128, off+160
 		// Decode G1 point
-		if points[i], err = g.DecodePoint(input[t0:t1]); err != nil {
+		p, err := decodePointG1(input[t0:t1])
+		if err != nil {
 			return nil, err
 		}
+		// 'point is on curve' check already done,
+		// Here we need to apply subgroup checks.
+		if !p.IsInSubGroup() {
+			return nil, errBLS12381G1PointSubgroup
+		}
+		points[i] = *p
 		// Decode scalar value
-		scalars[i] = new(big.Int).SetBytes(input[t1:t2])
+		scalars[i] = *new(fr.Element).SetBytes(input[t1:t2])
 	}
 
 	// Compute r = e_0 * p_0 + e_1 * p_1 + ... + e_(k-1) * p_(k-1)
-	r := g.New()
-	g.MultiExp(r, points, scalars)
+	r := new(bls12381.G1Affine)
+	r.MultiExp(points, scalars, ecc.MultiExpConfig{})
 
 	// Encode the G1 point to 128 bytes
-	return g.EncodePoint(r), nil
+	return encodePointG1(r), nil
+}
+
+func (c *bls12381G1MultiExp) Name() string {
+	return "BLS12_G1MSM"
 }
 
 // bls12381G2Add implements EIP-2537 G2Add precompile.
@@ -1140,62 +1038,29 @@ func (c *bls12381G2Add) Run(input []byte) ([]byte, error) {
 		return nil, errBLS12381InvalidInputLength
 	}
 	var err error
-	var p0, p1 *bls12381.PointG2
-
-	// Initialize G2
-	g := bls12381.NewG2()
-	r := g.New()
+	var p0, p1 *bls12381.G2Affine
 
 	// Decode G2 point p_0
-	if p0, err = g.DecodePoint(input[:256]); err != nil {
+	if p0, err = decodePointG2(input[:256]); err != nil {
 		return nil, err
 	}
 	// Decode G2 point p_1
-	if p1, err = g.DecodePoint(input[256:]); err != nil {
+	if p1, err = decodePointG2(input[256:]); err != nil {
 		return nil, err
 	}
+
+	// No need to check the subgroup here, as specified by EIP-2537
 
 	// Compute r = p_0 + p_1
-	g.Add(r, p0, p1)
+	r := new(bls12381.G2Affine)
+	r.Add(p0, p1)
 
 	// Encode the G2 point into 256 bytes
-	return g.EncodePoint(r), nil
+	return encodePointG2(r), nil
 }
 
-// bls12381G2Mul implements EIP-2537 G2Mul precompile.
-type bls12381G2Mul struct{}
-
-// RequiredGas returns the gas required to execute the pre-compiled contract.
-func (c *bls12381G2Mul) RequiredGas(input []byte) uint64 {
-	return params.Bls12381G2MulGas
-}
-
-func (c *bls12381G2Mul) Run(input []byte) ([]byte, error) {
-	// Implements EIP-2537 G2MUL precompile logic.
-	// > G2 multiplication call expects `288` bytes as an input that is interpreted as byte concatenation of encoding of G2 point (`256` bytes) and encoding of a scalar value (`32` bytes).
-	// > Output is an encoding of multiplication operation result - single G2 point (`256` bytes).
-	if len(input) != 288 {
-		return nil, errBLS12381InvalidInputLength
-	}
-	var err error
-	var p0 *bls12381.PointG2
-
-	// Initialize G2
-	g := bls12381.NewG2()
-
-	// Decode G2 point
-	if p0, err = g.DecodePoint(input[:256]); err != nil {
-		return nil, err
-	}
-	// Decode scalar value
-	e := new(big.Int).SetBytes(input[256:])
-
-	// Compute r = e * p_0
-	r := g.New()
-	g.MulScalar(r, p0, e)
-
-	// Encode the G2 point into 256 bytes
-	return g.EncodePoint(r), nil
+func (c *bls12381G2Add) Name() string {
+	return "BLS12_G2ADD"
 }
 
 // bls12381G2MultiExp implements EIP-2537 G2MultiExp precompile.
@@ -1211,10 +1076,10 @@ func (c *bls12381G2MultiExp) RequiredGas(input []byte) uint64 {
 	}
 	// Lookup discount value for G2 point, scalar value pair length
 	var discount uint64
-	if dLen := len(params.Bls12381MultiExpDiscountTable); k < dLen {
-		discount = params.Bls12381MultiExpDiscountTable[k-1]
+	if dLen := len(params.Bls12381G2MultiExpDiscountTable); k < dLen {
+		discount = params.Bls12381G2MultiExpDiscountTable[k-1]
 	} else {
-		discount = params.Bls12381MultiExpDiscountTable[dLen-1]
+		discount = params.Bls12381G2MultiExpDiscountTable[dLen-1]
 	}
 	// Calculate gas and return the result
 	return (uint64(k) * params.Bls12381G2MulGas * discount) / 1000
@@ -1228,31 +1093,38 @@ func (c *bls12381G2MultiExp) Run(input []byte) ([]byte, error) {
 	if len(input) == 0 || len(input)%288 != 0 {
 		return nil, errBLS12381InvalidInputLength
 	}
-	var err error
-	points := make([]*bls12381.PointG2, k)
-	scalars := make([]*big.Int, k)
-
-	// Initialize G2
-	g := bls12381.NewG2()
+	points := make([]bls12381.G2Affine, k)
+	scalars := make([]fr.Element, k)
 
 	// Decode point scalar pairs
 	for i := 0; i < k; i++ {
 		off := 288 * i
 		t0, t1, t2 := off, off+256, off+288
-		// Decode G1 point
-		if points[i], err = g.DecodePoint(input[t0:t1]); err != nil {
+		// Decode G2 point
+		p, err := decodePointG2(input[t0:t1])
+		if err != nil {
 			return nil, err
 		}
+		// 'point is on curve' check already done,
+		// Here we need to apply subgroup checks.
+		if !p.IsInSubGroup() {
+			return nil, errBLS12381G2PointSubgroup
+		}
+		points[i] = *p
 		// Decode scalar value
-		scalars[i] = new(big.Int).SetBytes(input[t1:t2])
+		scalars[i] = *new(fr.Element).SetBytes(input[t1:t2])
 	}
 
 	// Compute r = e_0 * p_0 + e_1 * p_1 + ... + e_(k-1) * p_(k-1)
-	r := g.New()
-	g.MultiExp(r, points, scalars)
+	r := new(bls12381.G2Affine)
+	r.MultiExp(points, scalars, ecc.MultiExpConfig{})
 
 	// Encode the G2 point to 256 bytes.
-	return g.EncodePoint(r), nil
+	return encodePointG2(r), nil
+}
+
+func (c *bls12381G2MultiExp) Name() string {
+	return "BLS12_G2MSM"
 }
 
 // bls12381Pairing implements EIP-2537 Pairing precompile.
@@ -1275,9 +1147,10 @@ func (c *bls12381Pairing) Run(input []byte) ([]byte, error) {
 		return nil, errBLS12381InvalidInputLength
 	}
 
-	// Initialize BLS12-381 pairing engine
-	e := bls12381.NewPairingEngine()
-	g1, g2 := e.G1, e.G2
+	var (
+		p []bls12381.G1Affine
+		q []bls12381.G2Affine
+	)
 
 	// Decode pairs
 	for i := 0; i < k; i++ {
@@ -1285,53 +1158,129 @@ func (c *bls12381Pairing) Run(input []byte) ([]byte, error) {
 		t0, t1, t2 := off, off+128, off+384
 
 		// Decode G1 point
-		p1, err := g1.DecodePoint(input[t0:t1])
+		p1, err := decodePointG1(input[t0:t1])
 		if err != nil {
 			return nil, err
 		}
 		// Decode G2 point
-		p2, err := g2.DecodePoint(input[t1:t2])
+		p2, err := decodePointG2(input[t1:t2])
 		if err != nil {
 			return nil, err
 		}
 
 		// 'point is on curve' check already done,
 		// Here we need to apply subgroup checks.
-		if !g1.InCorrectSubgroup(p1) {
+		if !p1.IsInSubGroup() {
 			return nil, errBLS12381G1PointSubgroup
 		}
-		if !g2.InCorrectSubgroup(p2) {
+		if !p2.IsInSubGroup() {
 			return nil, errBLS12381G2PointSubgroup
 		}
-
-		// Update pairing engine with G1 and G2 ponits
-		e.AddPair(p1, p2)
+		p = append(p, *p1)
+		q = append(q, *p2)
 	}
 	// Prepare 32 byte output
 	out := make([]byte, 32)
 
 	// Compute pairing and set the result
-	if e.Check() {
+	ok, err := bls12381.PairingCheck(p, q)
+	if err == nil && ok {
 		out[31] = 1
 	}
 	return out, nil
 }
 
+func (c *bls12381Pairing) Name() string {
+	return "BLS12_PAIRING_CHECK"
+}
+
+func decodePointG1(in []byte) (*bls12381.G1Affine, error) {
+	if len(in) != 128 {
+		return nil, errors.New("invalid g1 point length")
+	}
+	// decode x
+	x, err := decodeBLS12381FieldElement(in[:64])
+	if err != nil {
+		return nil, err
+	}
+	// decode y
+	y, err := decodeBLS12381FieldElement(in[64:])
+	if err != nil {
+		return nil, err
+	}
+	elem := bls12381.G1Affine{X: x, Y: y}
+	if !elem.IsOnCurve() {
+		return nil, errors.New("invalid point: not on curve")
+	}
+
+	return &elem, nil
+}
+
+// decodePointG2 given encoded (x, y) coordinates in 256 bytes returns a valid G2 Point.
+func decodePointG2(in []byte) (*bls12381.G2Affine, error) {
+	if len(in) != 256 {
+		return nil, errors.New("invalid g2 point length")
+	}
+	x0, err := decodeBLS12381FieldElement(in[:64])
+	if err != nil {
+		return nil, err
+	}
+	x1, err := decodeBLS12381FieldElement(in[64:128])
+	if err != nil {
+		return nil, err
+	}
+	y0, err := decodeBLS12381FieldElement(in[128:192])
+	if err != nil {
+		return nil, err
+	}
+	y1, err := decodeBLS12381FieldElement(in[192:])
+	if err != nil {
+		return nil, err
+	}
+
+	p := bls12381.G2Affine{X: bls12381.E2{A0: x0, A1: x1}, Y: bls12381.E2{A0: y0, A1: y1}}
+	if !p.IsOnCurve() {
+		return nil, errors.New("invalid point: not on curve")
+	}
+	return &p, err
+}
+
 // decodeBLS12381FieldElement decodes BLS12-381 elliptic curve field element.
 // Removes top 16 bytes of 64 byte input.
-func decodeBLS12381FieldElement(in []byte) ([]byte, error) {
+func decodeBLS12381FieldElement(in []byte) (fp.Element, error) {
 	if len(in) != 64 {
-		return nil, errors.New("invalid field element length")
+		return fp.Element{}, errors.New("invalid field element length")
 	}
 	// check top bytes
 	for i := 0; i < 16; i++ {
 		if in[i] != byte(0x00) {
-			return nil, errBLS12381InvalidFieldElementTopBytes
+			return fp.Element{}, errBLS12381InvalidFieldElementTopBytes
 		}
 	}
-	out := make([]byte, 48)
-	copy(out[:], in[16:])
-	return out, nil
+	var res [48]byte
+	copy(res[:], in[16:])
+
+	return fp.BigEndian.Element(&res)
+}
+
+// encodePointG1 encodes a point into 128 bytes.
+func encodePointG1(p *bls12381.G1Affine) []byte {
+	out := make([]byte, 128)
+	fp.BigEndian.PutElement((*[fp.Bytes]byte)(out[16:]), p.X)
+	fp.BigEndian.PutElement((*[fp.Bytes]byte)(out[64+16:]), p.Y)
+	return out
+}
+
+// encodePointG2 encodes a point into 256 bytes.
+func encodePointG2(p *bls12381.G2Affine) []byte {
+	out := make([]byte, 256)
+	// encode x
+	fp.BigEndian.PutElement((*[fp.Bytes]byte)(out[16:16+48]), p.X.A0)
+	fp.BigEndian.PutElement((*[fp.Bytes]byte)(out[80:80+48]), p.X.A1)
+	// encode y
+	fp.BigEndian.PutElement((*[fp.Bytes]byte)(out[144:144+48]), p.Y.A0)
+	fp.BigEndian.PutElement((*[fp.Bytes]byte)(out[208:208+48]), p.Y.A1)
+	return out
 }
 
 // bls12381MapG1 implements EIP-2537 MapG1 precompile.
@@ -1344,7 +1293,7 @@ func (c *bls12381MapG1) RequiredGas(input []byte) uint64 {
 
 func (c *bls12381MapG1) Run(input []byte) ([]byte, error) {
 	// Implements EIP-2537 Map_To_G1 precompile.
-	// > Field-to-curve call expects `64` bytes an an input that is interpreted as a an element of the base field.
+	// > Field-to-curve call expects an `64` bytes input that is interpreted as an element of the base field.
 	// > Output of this call is `128` bytes and is G1 point following respective encoding rules.
 	if len(input) != 64 {
 		return nil, errBLS12381InvalidInputLength
@@ -1356,17 +1305,15 @@ func (c *bls12381MapG1) Run(input []byte) ([]byte, error) {
 		return nil, err
 	}
 
-	// Initialize G1
-	g := bls12381.NewG1()
-
 	// Compute mapping
-	r, err := g.MapToCurve(fe)
-	if err != nil {
-		return nil, err
-	}
+	r := bls12381.MapToG1(fe)
 
 	// Encode the G1 point to 128 bytes
-	return g.EncodePoint(r), nil
+	return encodePointG1(&r), nil
+}
+
+func (c *bls12381MapG1) Name() string {
+	return "BLS12_MAP_FP_TO_G1"
 }
 
 // bls12381MapG2 implements EIP-2537 MapG2 precompile.
@@ -1379,106 +1326,129 @@ func (c *bls12381MapG2) RequiredGas(input []byte) uint64 {
 
 func (c *bls12381MapG2) Run(input []byte) ([]byte, error) {
 	// Implements EIP-2537 Map_FP2_TO_G2 precompile logic.
-	// > Field-to-curve call expects `128` bytes an an input that is interpreted as a an element of the quadratic extension field.
+	// > Field-to-curve call expects an `128` bytes input that is interpreted as an element of the quadratic extension field.
 	// > Output of this call is `256` bytes and is G2 point following respective encoding rules.
 	if len(input) != 128 {
 		return nil, errBLS12381InvalidInputLength
 	}
 
 	// Decode input field element
-	fe := make([]byte, 96)
 	c0, err := decodeBLS12381FieldElement(input[:64])
 	if err != nil {
 		return nil, err
 	}
-	copy(fe[48:], c0)
 	c1, err := decodeBLS12381FieldElement(input[64:])
 	if err != nil {
 		return nil, err
 	}
-	copy(fe[:48], c1)
-
-	// Initialize G2
-	g := bls12381.NewG2()
 
 	// Compute mapping
-	r, err := g.MapToCurve(fe)
-	if err != nil {
-		return nil, err
-	}
+	r := bls12381.MapToG2(bls12381.E2{A0: c0, A1: c1})
 
 	// Encode the G2 point to 256 bytes
-	return g.EncodePoint(r), nil
+	return encodePointG2(&r), nil
 }
 
-type getMainChainBlockByHeight struct{}
-
-func (c *getMainChainBlockByHeight) RequiredGas(input []byte) uint64 {
-	return params.GetMainChainBlock
+func (c *bls12381MapG2) Name() string {
+	return "BLS12_MAP_FP2_TO_G2"
 }
 
-func (c *getMainChainBlockByHeight) Run(input []byte) ([]byte, error) {
-	data := getData(input, 32, 32)
-	height := big.NewInt(0).SetBytes(data)
+// kzgPointEvaluation implements the EIP-4844 point evaluation precompile.
+type kzgPointEvaluation struct{}
 
-	header, err := spv.SpvService.GetELAHeader(uint32(height.Uint64()))
-	if err != nil {
-		log.Error("getMainChainBlockByHeight failed", "error", err, " height", height)
-		return []byte{}, err
-	}
-
-	arguments := make([]abi.Argument, 0)
-	Bytes32, _ := abi.NewType("bytes32", "bytes32", nil)
-	UInt32, _ := abi.NewType("uint32", "uint32", nil)
-	// Bytes, _ := abi.NewType("bytes", "bytes", nil)
-
-	Previous := abi.Argument{Name: "Previous", Type: Bytes32}
-	arguments = append(arguments, Previous)
-
-	Bits := abi.Argument{Name: "Bits", Type: UInt32}
-	arguments = append(arguments, Bits)
-
-	MerkleRoot := abi.Argument{Name: "MerkleRoot", Type: Bytes32}
-	arguments = append(arguments, MerkleRoot)
-
-	Hash := abi.Argument{Name: "Hash", Type: Bytes32}
-	arguments = append(arguments, Hash)
-
-	Height := abi.Argument{Name: "Height", Type: UInt32}
-	arguments = append(arguments, Height)
-
-	m := abi.Method{Inputs: arguments}
-	ret, err := m.Inputs.Pack(header.Previous(), header.Bits(), header.MerkleRoot(), header.Hash(), header.Height)
-	if err != nil {
-		log.Error("getMainChainBlockByHeight failed ", "error ", err)
-		return ret, err
-	}
-	return ret, nil
+// RequiredGas estimates the gas required for running the point evaluation precompile.
+func (b *kzgPointEvaluation) RequiredGas(input []byte) uint64 {
+	return params.BlobTxPointEvaluationPrecompileGas
 }
 
-type getMainChainLatestHeight struct{}
+const (
+	blobVerifyInputLength           = 192  // Max input length for the point evaluation precompile.
+	blobCommitmentVersionKZG  uint8 = 0x01 // Version byte for the point evaluation precompile.
+	blobPrecompileReturnValue       = "000000000000000000000000000000000000000000000000000000000000100073eda753299d7d483339d80809a1d80553bda402fffe5bfeffffffff00000001"
+)
 
-func (h *getMainChainLatestHeight) RequiredGas(input []byte) uint64 {
-	return params.GetMainChainBlockLatestHeight
+var (
+	errBlobVerifyInvalidInputLength = errors.New("invalid input length")
+	errBlobVerifyMismatchedVersion  = errors.New("mismatched versioned hash")
+	errBlobVerifyKZGProof           = errors.New("error verifying kzg proof")
+)
+
+// Run executes the point evaluation precompile.
+func (b *kzgPointEvaluation) Run(input []byte) ([]byte, error) {
+	if len(input) != blobVerifyInputLength {
+		return nil, errBlobVerifyInvalidInputLength
+	}
+	// versioned hash: first 32 bytes
+	var versionedHash common.Hash
+	copy(versionedHash[:], input[:])
+
+	var (
+		point kzg4844.Point
+		claim kzg4844.Claim
+	)
+	// Evaluation point: next 32 bytes
+	copy(point[:], input[32:])
+	// Expected output: next 32 bytes
+	copy(claim[:], input[64:])
+
+	// input kzg point: next 48 bytes
+	var commitment kzg4844.Commitment
+	copy(commitment[:], input[96:])
+	if kZGToVersionedHash(commitment) != versionedHash {
+		return nil, errBlobVerifyMismatchedVersion
+	}
+
+	// Proof: next 48 bytes
+	var proof kzg4844.Proof
+	copy(proof[:], input[144:])
+
+	if err := kzg4844.VerifyProof(commitment, point, claim, proof); err != nil {
+		return nil, fmt.Errorf("%w: %v", errBlobVerifyKZGProof, err)
+	}
+
+	return common.Hex2Bytes(blobPrecompileReturnValue), nil
 }
 
-func (h *getMainChainLatestHeight) Run(input []byte) ([]byte, error) {
-	head, err := spv.SpvService.HeaderStore().GetBest()
-	if err != nil {
-		log.Error("getMainChainLatestHeight failed", "error", err)
-		return []byte{}, err
-	}
-	UInt32, _ := abi.NewType("uint32", "uint32", nil)
-	arguments := make([]abi.Argument, 0)
+func (b *kzgPointEvaluation) Name() string {
+	return "KZG_POINT_EVALUATION"
+}
 
-	Height := abi.Argument{Name: "Height", Type: UInt32}
-	arguments = append(arguments, Height)
+// kZGToVersionedHash implements kzg_to_versioned_hash from EIP-4844
+func kZGToVersionedHash(kzg kzg4844.Commitment) common.Hash {
+	h := sha256.Sum256(kzg[:])
+	h[0] = blobCommitmentVersionKZG
 
-	m := abi.Method{Inputs: arguments}
-	ret, err := m.Inputs.Pack(head.Height)
-	if err != nil {
-		log.Error("getMainChainLatestHeight pack failed ", "error ", err)
-		return ret, err
+	return h
+}
+
+// P256VERIFY (secp256r1 signature verification)
+// implemented as a native contract
+type p256Verify struct{}
+
+// RequiredGas returns the gas required to execute the precompiled contract
+func (c *p256Verify) RequiredGas(input []byte) uint64 {
+	return params.P256VerifyGas
+}
+
+// Run executes the precompiled contract with given 160 bytes of param, returning the output and the used gas
+func (c *p256Verify) Run(input []byte) ([]byte, error) {
+	const p256VerifyInputLength = 160
+	if len(input) != p256VerifyInputLength {
+		return nil, nil
 	}
-	return ret, nil
+
+	// Extract hash, r, s, x, y from the input.
+	hash := input[0:32]
+	r, s := new(big.Int).SetBytes(input[32:64]), new(big.Int).SetBytes(input[64:96])
+	x, y := new(big.Int).SetBytes(input[96:128]), new(big.Int).SetBytes(input[128:160])
+
+	// Verify the signature.
+	if secp256r1.Verify(hash, r, s, x, y) {
+		return true32Byte, nil
+	}
+	return nil, nil
+}
+
+func (c *p256Verify) Name() string {
+	return "P256VERIFY"
 }

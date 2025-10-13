@@ -1,18 +1,18 @@
-// Copyright 2015 The Elastos.ELA.SideChain.ESC Authors
-// This file is part of the Elastos.ELA.SideChain.ESC library.
+// Copyright 2015 The go-ethereum Authors
+// This file is part of the go-ethereum library.
 //
-// The Elastos.ELA.SideChain.ESC library is free software: you can redistribute it and/or modify
+// The go-ethereum library is free software: you can redistribute it and/or modify
 // it under the terms of the GNU Lesser General Public License as published by
 // the Free Software Foundation, either version 3 of the License, or
 // (at your option) any later version.
 //
-// The Elastos.ELA.SideChain.ESC library is distributed in the hope that it will be useful,
+// The go-ethereum library is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
 // MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
 // GNU Lesser General Public License for more details.
 //
 // You should have received a copy of the GNU Lesser General Public License
-// along with the Elastos.ELA.SideChain.ESC library. If not, see <http://www.gnu.org/licenses/>.
+// along with the go-ethereum library. If not, see <http://www.gnu.org/licenses/>.
 
 package abi
 
@@ -45,7 +45,7 @@ const (
 // If the method is `Const` no transaction needs to be created for this
 // particular Method call. It can easily be simulated using a local VM.
 // For example a `Balance()` method only needs to retrieve something
-// from the storage and therefore requires no Tx to be send to the
+// from the storage and therefore requires no Tx to be sent to the
 // network. A method such as `Transact` does require a Tx and thus will
 // be flagged `false`.
 // Input specifies the required input parameters for this gives method.
@@ -117,24 +117,23 @@ func NewMethod(name string, rawName string, funType FunctionType, mutability str
 		sig = fmt.Sprintf("%v(%v)", rawName, strings.Join(types, ","))
 		id = crypto.Keccak256([]byte(sig))[:4]
 	}
-	// Extract meaningful state mutability of solidity method.
-	// If it's default value, never print it.
-	state := mutability
-	if state == "nonpayable" {
-		state = ""
-	}
-	if state != "" {
-		state = state + " "
-	}
 	identity := fmt.Sprintf("function %v", rawName)
-	if funType == Fallback {
+	switch funType {
+	case Fallback:
 		identity = "fallback"
-	} else if funType == Receive {
+	case Receive:
 		identity = "receive"
-	} else if funType == Constructor {
+	case Constructor:
 		identity = "constructor"
 	}
-	str := fmt.Sprintf("%v(%v) %sreturns(%v)", identity, strings.Join(inputNames, ", "), state, strings.Join(outputNames, ", "))
+	var str string
+	// Extract meaningful state mutability of solidity method.
+	// If it's empty string or default value "nonpayable", never print it.
+	if mutability == "" || mutability == "nonpayable" {
+		str = fmt.Sprintf("%v(%v) returns(%v)", identity, strings.Join(inputNames, ", "), strings.Join(outputNames, ", "))
+	} else {
+		str = fmt.Sprintf("%v(%v) %s returns(%v)", identity, strings.Join(inputNames, ", "), mutability, strings.Join(outputNames, ", "))
+	}
 
 	return Method{
 		Name:            name,

@@ -1,24 +1,25 @@
-// Copyright 2018 The Elastos.ELA.SideChain.ESC Authors
-// This file is part of the Elastos.ELA.SideChain.ESC library.
+// Copyright 2018 The go-ethereum Authors
+// This file is part of the go-ethereum library.
 //
-// The Elastos.ELA.SideChain.ESC library is free software: you can redistribute it and/or modify
+// The go-ethereum library is free software: you can redistribute it and/or modify
 // it under the terms of the GNU Lesser General Public License as published by
 // the Free Software Foundation, either version 3 of the License, or
 // (at your option) any later version.
 //
-// The Elastos.ELA.SideChain.ESC library is distributed in the hope that it will be useful,
+// The go-ethereum library is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
 // MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
 // GNU Lesser General Public License for more details.
 //
 // You should have received a copy of the GNU Lesser General Public License
-// along with the Elastos.ELA.SideChain.ESC library. If not, see <http://www.gnu.org/licenses/>.
+// along with the go-ethereum library. If not, see <http://www.gnu.org/licenses/>.
 
 package netutil
 
 import (
+	crand "crypto/rand"
 	"fmt"
-	mrand "math/rand"
+	"net/netip"
 	"testing"
 	"time"
 
@@ -42,37 +43,37 @@ func TestIPTracker(t *testing.T) {
 	tests := map[string][]iptrackTestEvent{
 		"minStatements": {
 			{opPredict, 0, "", ""},
-			{opStatement, 0, "127.0.0.1", "127.0.0.2"},
+			{opStatement, 0, "127.0.0.1:8000", "127.0.0.2"},
 			{opPredict, 1000, "", ""},
-			{opStatement, 1000, "127.0.0.1", "127.0.0.3"},
+			{opStatement, 1000, "127.0.0.1:8000", "127.0.0.3"},
 			{opPredict, 1000, "", ""},
-			{opStatement, 1000, "127.0.0.1", "127.0.0.4"},
-			{opPredict, 1000, "127.0.0.1", ""},
+			{opStatement, 1000, "127.0.0.1:8000", "127.0.0.4"},
+			{opPredict, 1000, "127.0.0.1:8000", ""},
 		},
 		"window": {
-			{opStatement, 0, "127.0.0.1", "127.0.0.2"},
-			{opStatement, 2000, "127.0.0.1", "127.0.0.3"},
-			{opStatement, 3000, "127.0.0.1", "127.0.0.4"},
-			{opPredict, 10000, "127.0.0.1", ""},
+			{opStatement, 0, "127.0.0.1:8000", "127.0.0.2"},
+			{opStatement, 2000, "127.0.0.1:8000", "127.0.0.3"},
+			{opStatement, 3000, "127.0.0.1:8000", "127.0.0.4"},
+			{opPredict, 10000, "127.0.0.1:8000", ""},
 			{opPredict, 10001, "", ""}, // first statement expired
-			{opStatement, 10100, "127.0.0.1", "127.0.0.2"},
-			{opPredict, 10200, "127.0.0.1", ""},
+			{opStatement, 10100, "127.0.0.1:8000", "127.0.0.2"},
+			{opPredict, 10200, "127.0.0.1:8000", ""},
 		},
 		"fullcone": {
 			{opContact, 0, "", "127.0.0.2"},
-			{opStatement, 10, "127.0.0.1", "127.0.0.2"},
+			{opStatement, 10, "127.0.0.1:8000", "127.0.0.2"},
 			{opContact, 2000, "", "127.0.0.3"},
-			{opStatement, 2010, "127.0.0.1", "127.0.0.3"},
+			{opStatement, 2010, "127.0.0.1:8000", "127.0.0.3"},
 			{opContact, 3000, "", "127.0.0.4"},
-			{opStatement, 3010, "127.0.0.1", "127.0.0.4"},
+			{opStatement, 3010, "127.0.0.1:8000", "127.0.0.4"},
 			{opCheckFullCone, 3500, "false", ""},
 		},
 		"fullcone_2": {
 			{opContact, 0, "", "127.0.0.2"},
-			{opStatement, 10, "127.0.0.1", "127.0.0.2"},
+			{opStatement, 10, "127.0.0.1:8000", "127.0.0.2"},
 			{opContact, 2000, "", "127.0.0.3"},
-			{opStatement, 2010, "127.0.0.1", "127.0.0.3"},
-			{opStatement, 3000, "127.0.0.1", "127.0.0.4"},
+			{opStatement, 2010, "127.0.0.1:8000", "127.0.0.3"},
+			{opStatement, 3000, "127.0.0.1:8000", "127.0.0.4"},
 			{opContact, 3010, "", "127.0.0.4"},
 			{opCheckFullCone, 3500, "true", ""},
 		},
@@ -93,12 +94,19 @@ func runIPTrackerTest(t *testing.T, evs []iptrackTestEvent) {
 		clock.Run(evtime - time.Duration(clock.Now()))
 		switch ev.op {
 		case opStatement:
-			it.AddStatement(ev.from, ev.ip)
+			it.AddStatement(netip.MustParseAddr(ev.from), netip.MustParseAddrPort(ev.ip))
 		case opContact:
-			it.AddContact(ev.from)
+			it.AddContact(netip.MustParseAddr(ev.from))
 		case opPredict:
-			if pred := it.PredictEndpoint(); pred != ev.ip {
-				t.Errorf("op %d: wrong prediction %q, want %q", i, pred, ev.ip)
+			pred := it.PredictEndpoint()
+			if ev.ip == "" {
+				if pred.IsValid() {
+					t.Errorf("op %d: wrong prediction %v, expected invalid", i, pred)
+				}
+			} else {
+				if pred != netip.MustParseAddrPort(ev.ip) {
+					t.Errorf("op %d: wrong prediction %v, want %q", i, pred, ev.ip)
+				}
 			}
 		case opCheckFullCone:
 			pred := fmt.Sprintf("%t", it.PredictFullConeNAT())
@@ -121,12 +129,11 @@ func TestIPTrackerForceGC(t *testing.T) {
 	it.clock = &clock
 
 	for i := 0; i < 5*max; i++ {
-		e1 := make([]byte, 4)
-		e2 := make([]byte, 4)
-		mrand.Read(e1)
-		mrand.Read(e2)
-		it.AddStatement(string(e1), string(e2))
-		it.AddContact(string(e1))
+		var e1, e2 [4]byte
+		crand.Read(e1[:])
+		crand.Read(e2[:])
+		it.AddStatement(netip.AddrFrom4(e1), netip.AddrPortFrom(netip.AddrFrom4(e2), 9000))
+		it.AddContact(netip.AddrFrom4(e1))
 		clock.Run(rate)
 	}
 	if len(it.contact) > 2*max {

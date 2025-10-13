@@ -1,22 +1,23 @@
-// Copyright 2020 The Elastos.ELA.SideChain.ESC Authors
-// This file is part of the Elastos.ELA.SideChain.ESC library.
+// Copyright 2020 The go-ethereum Authors
+// This file is part of the go-ethereum library.
 //
-// The Elastos.ELA.SideChain.ESC library is free software: you can redistribute it and/or modify
+// The go-ethereum library is free software: you can redistribute it and/or modify
 // it under the terms of the GNU Lesser General Public License as published by
 // the Free Software Foundation, either version 3 of the License, or
 // (at your option) any later version.
 //
-// The Elastos.ELA.SideChain.ESC library is distributed in the hope that it will be useful,
+// The go-ethereum library is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
 // MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
 // GNU Lesser General Public License for more details.
 //
 // You should have received a copy of the GNU Lesser General Public License
-// along with the Elastos.ELA.SideChain.ESC library. If not, see <http://www.gnu.org/licenses/>.
+// along with the go-ethereum library. If not, see <http://www.gnu.org/licenses/>.
 
 package abi
 
 import (
+	"math"
 	"math/big"
 	"reflect"
 	"testing"
@@ -26,6 +27,7 @@ import (
 )
 
 func TestMakeTopics(t *testing.T) {
+	t.Parallel()
 	type args struct {
 		query [][]interface{}
 	}
@@ -54,9 +56,27 @@ func TestMakeTopics(t *testing.T) {
 			false,
 		},
 		{
-			"support *big.Int types in topics",
-			args{[][]interface{}{{big.NewInt(1).Lsh(big.NewInt(2), 254)}}},
-			[][]common.Hash{{common.Hash{128}}},
+			"support positive *big.Int types in topics",
+			args{[][]interface{}{
+				{big.NewInt(1)},
+				{big.NewInt(1).Lsh(big.NewInt(2), 254)},
+			}},
+			[][]common.Hash{
+				{common.HexToHash("0000000000000000000000000000000000000000000000000000000000000001")},
+				{common.Hash{128}},
+			},
+			false,
+		},
+		{
+			"support negative *big.Int types in topics",
+			args{[][]interface{}{
+				{big.NewInt(-1)},
+				{big.NewInt(math.MinInt64)},
+			}},
+			[][]common.Hash{
+				{common.MaxHash},
+				{common.HexToHash("ffffffffffffffffffffffffffffffffffffffffffffffff8000000000000000")},
+			},
 			false,
 		},
 		{
@@ -118,6 +138,7 @@ func TestMakeTopics(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			got, err := MakeTopics(tt.args.query...)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("makeTopics() error = %v, wantErr %v", err, tt.wantErr)
@@ -128,6 +149,23 @@ func TestMakeTopics(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("does not mutate big.Int", func(t *testing.T) {
+		t.Parallel()
+		want := [][]common.Hash{{common.HexToHash("ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff")}}
+
+		in := big.NewInt(-1)
+		got, err := MakeTopics([]interface{}{in})
+		if err != nil {
+			t.Fatalf("makeTopics() error = %v", err)
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("makeTopics() = %v, want %v", got, want)
+		}
+		if orig := big.NewInt(-1); in.Cmp(orig) != 0 {
+			t.Fatalf("makeTopics() mutated an input parameter from %v to %v", orig, in)
+		}
+	})
 }
 
 type args struct {
@@ -347,10 +385,12 @@ func setupTopicsTests() []topicTest {
 }
 
 func TestParseTopics(t *testing.T) {
+	t.Parallel()
 	tests := setupTopicsTests()
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			createObj := tt.args.createObj()
 			if err := ParseTopics(createObj, tt.args.fields, tt.args.topics); (err != nil) != tt.wantErr {
 				t.Errorf("parseTopics() error = %v, wantErr %v", err, tt.wantErr)
@@ -364,10 +404,12 @@ func TestParseTopics(t *testing.T) {
 }
 
 func TestParseTopicsIntoMap(t *testing.T) {
+	t.Parallel()
 	tests := setupTopicsTests()
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			outMap := make(map[string]interface{})
 			if err := ParseTopicsIntoMap(outMap, tt.args.fields, tt.args.topics); (err != nil) != tt.wantErr {
 				t.Errorf("parseTopicsIntoMap() error = %v, wantErr %v", err, tt.wantErr)

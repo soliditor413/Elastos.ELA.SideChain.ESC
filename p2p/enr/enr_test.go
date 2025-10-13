@@ -1,18 +1,18 @@
-// Copyright 2017 The Elastos.ELA.SideChain.ESC Authors
-// This file is part of the Elastos.ELA.SideChain.ESC library.
+// Copyright 2017 The go-ethereum Authors
+// This file is part of the go-ethereum library.
 //
-// The Elastos.ELA.SideChain.ESC library is free software: you can redistribute it and/or modify
+// The go-ethereum library is free software: you can redistribute it and/or modify
 // it under the terms of the GNU Lesser General Public License as published by
 // the Free Software Foundation, either version 3 of the License, or
 // (at your option) any later version.
 //
-// The Elastos.ELA.SideChain.ESC library is distributed in the hope that it will be useful,
+// The go-ethereum library is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
 // MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
 // GNU Lesser General Public License for more details.
 //
 // You should have received a copy of the GNU Lesser General Public License
-// along with the Elastos.ELA.SideChain.ESC library. If not, see <http://www.gnu.org/licenses/>.
+// along with the go-ethereum library. If not, see <http://www.gnu.org/licenses/>.
 
 package enr
 
@@ -48,7 +48,7 @@ func TestGetSetID(t *testing.T) {
 	assert.Equal(t, id, id2)
 }
 
-// TestGetSetIP4 tests encoding/decoding and setting/getting of the IP key.
+// TestGetSetIPv4 tests encoding/decoding and setting/getting of the IP key.
 func TestGetSetIPv4(t *testing.T) {
 	ip := IPv4{192, 168, 0, 3}
 	var r Record
@@ -59,7 +59,7 @@ func TestGetSetIPv4(t *testing.T) {
 	assert.Equal(t, ip, ip2)
 }
 
-// TestGetSetIP6 tests encoding/decoding and setting/getting of the IP6 key.
+// TestGetSetIPv6 tests encoding/decoding and setting/getting of the IP6 key.
 func TestGetSetIPv6(t *testing.T) {
 	ip := IPv6{0x20, 0x01, 0x48, 0x60, 0, 0, 0x20, 0x01, 0, 0, 0, 0, 0, 0, 0x00, 0x68}
 	var r Record
@@ -169,6 +169,32 @@ func TestDirty(t *testing.T) {
 	}
 }
 
+func TestSize(t *testing.T) {
+	var r Record
+
+	// Empty record size is 3 bytes.
+	// Unsigned records cannot be encoded, but they could, the encoding
+	// would be [ 0, 0 ] -> 0xC28080.
+	assert.Equal(t, uint64(3), r.Size())
+
+	// Add one attribute. The size increases to 5, the encoding
+	// would be [ 0, 0, "k", "v" ] -> 0xC58080C26B76.
+	r.Set(WithEntry("k", "v"))
+	assert.Equal(t, uint64(5), r.Size())
+
+	// Now add a signature.
+	nodeid := []byte{1, 2, 3, 4, 5, 6, 7, 8}
+	signTest(nodeid, &r)
+	assert.Equal(t, uint64(45), r.Size())
+	enc, _ := rlp.EncodeToBytes(&r)
+	if r.Size() != uint64(len(enc)) {
+		t.Error("Size() not equal encoded length", len(enc))
+	}
+	if r.Size() != computeSize(&r) {
+		t.Error("Size() not equal computed size", computeSize(&r))
+	}
+}
+
 func TestSeq(t *testing.T) {
 	var r Record
 
@@ -199,7 +225,7 @@ func TestGetSetOverwrite(t *testing.T) {
 // TestSignEncodeAndDecode tests signing, RLP encoding and RLP decoding of a record.
 func TestSignEncodeAndDecode(t *testing.T) {
 	var r Record
-	r.Set(UDP(20638))
+	r.Set(UDP(30303))
 	r.Set(IPv4{127, 0, 0, 1})
 	require.NoError(t, signTest([]byte{5}, &r))
 
@@ -231,6 +257,29 @@ func TestRecordTooBig(t *testing.T) {
 	require.NoError(t, signTest([]byte{5}, &r))
 }
 
+// This checks that incomplete RLP inputs are handled correctly.
+func TestDecodeIncomplete(t *testing.T) {
+	type decTest struct {
+		input []byte
+		err   error
+	}
+	tests := []decTest{
+		{[]byte{0xC0}, errIncompleteList},
+		{[]byte{0xC1, 0x1}, errIncompleteList},
+		{[]byte{0xC2, 0x1, 0x2}, nil},
+		{[]byte{0xC3, 0x1, 0x2, 0x3}, errIncompletePair},
+		{[]byte{0xC4, 0x1, 0x2, 0x3, 0x4}, nil},
+		{[]byte{0xC5, 0x1, 0x2, 0x3, 0x4, 0x5}, errIncompletePair},
+	}
+	for _, test := range tests {
+		var r Record
+		err := rlp.DecodeBytes(test.input, &r)
+		if err != test.err {
+			t.Errorf("wrong error for %X: %v", test.input, err)
+		}
+	}
+}
+
 // TestSignEncodeAndDecodeRandom tests encoding/decoding of records containing random key/value pairs.
 func TestSignEncodeAndDecodeRandom(t *testing.T) {
 	var r Record
@@ -245,8 +294,11 @@ func TestSignEncodeAndDecodeRandom(t *testing.T) {
 	}
 
 	require.NoError(t, signTest([]byte{5}, &r))
-	_, err := rlp.EncodeToBytes(r)
+
+	enc, err := rlp.EncodeToBytes(r)
 	require.NoError(t, err)
+	require.Equal(t, uint64(len(enc)), r.Size())
+	require.Equal(t, uint64(len(enc)), computeSize(&r))
 
 	for k, v := range pairs {
 		desc := fmt.Sprintf("key %q", k)

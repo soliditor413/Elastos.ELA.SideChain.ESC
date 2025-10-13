@@ -1,22 +1,24 @@
-// Copyright 2016 The Elastos.ELA.SideChain.ESC Authors
-// This file is part of the Elastos.ELA.SideChain.ESC library.
+// Copyright 2016 The go-ethereum Authors
+// This file is part of the go-ethereum library.
 //
-// The Elastos.ELA.SideChain.ESC library is free software: you can redistribute it and/or modify
+// The go-ethereum library is free software: you can redistribute it and/or modify
 // it under the terms of the GNU Lesser General Public License as published by
 // the Free Software Foundation, either version 3 of the License, or
 // (at your option) any later version.
 //
-// The Elastos.ELA.SideChain.ESC library is distributed in the hope that it will be useful,
+// The go-ethereum library is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
 // MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
 // GNU Lesser General Public License for more details.
 //
 // You should have received a copy of the GNU Lesser General Public License
-// along with the Elastos.ELA.SideChain.ESC library. If not, see <http://www.gnu.org/licenses/>.
+// along with the go-ethereum library. If not, see <http://www.gnu.org/licenses/>.
 
 package types
 
 import (
+	"errors"
+	"fmt"
 	"math/big"
 	"testing"
 
@@ -41,7 +43,7 @@ func TestEIP155Signing(t *testing.T) {
 		t.Fatal(err)
 	}
 	if from != addr {
-		t.Errorf("exected from and address to be equal. Got %x want %x", from, addr)
+		t.Errorf("expected from and address to be equal. Got %x want %x", from, addr)
 	}
 }
 
@@ -112,7 +114,6 @@ func TestEIP155SigningVitalik(t *testing.T) {
 		if from != addr {
 			t.Errorf("%d: expected %x got %x", i, addr, from)
 		}
-
 	}
 }
 
@@ -126,16 +127,64 @@ func TestChainId(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	config := &params.ChainConfig{ChainID: big.NewInt(2), OldChainID: big.NewInt(2), EIP150Block: big.NewInt(0), EIP155Block: big.NewInt(2), HomesteadBlock: new(big.Int), PBFTBlock: big.NewInt(0), ChainIDBlock: big.NewInt(0)}
-	signer := NewEIP155Signer(big.NewInt(2))
-	signer.SetForkData(config, big.NewInt(1))
-	_, err = Sender(signer, tx)
-	if err != ErrInvalidChainId {
-		t.Error("expected error:", ErrInvalidChainId)
+
+	_, err = Sender(NewEIP155Signer(big.NewInt(2)), tx)
+	if !errors.Is(err, ErrInvalidChainId) {
+		t.Error("expected error:", ErrInvalidChainId, err)
 	}
 
 	_, err = Sender(NewEIP155Signer(big.NewInt(1)), tx)
 	if err != nil {
 		t.Error("expected no error")
+	}
+}
+
+type nilSigner struct {
+	v, r, s *big.Int
+	Signer
+}
+
+func (ns *nilSigner) SignatureValues(tx *Transaction, sig []byte) (r, s, v *big.Int, err error) {
+	return ns.v, ns.r, ns.s, nil
+}
+
+// TestNilSigner ensures a faulty Signer implementation does not result in nil signature values or panics.
+func TestNilSigner(t *testing.T) {
+	key, _ := crypto.GenerateKey()
+	innerSigner := LatestSignerForChainID(big.NewInt(1))
+	for i, signer := range []Signer{
+		&nilSigner{v: nil, r: nil, s: nil, Signer: innerSigner},
+		&nilSigner{v: big.NewInt(1), r: big.NewInt(1), s: nil, Signer: innerSigner},
+		&nilSigner{v: big.NewInt(1), r: nil, s: big.NewInt(1), Signer: innerSigner},
+		&nilSigner{v: nil, r: big.NewInt(1), s: big.NewInt(1), Signer: innerSigner},
+	} {
+		t.Run(fmt.Sprintf("signer_%d", i), func(t *testing.T) {
+			t.Run("legacy", func(t *testing.T) {
+				legacyTx := createTestLegacyTxInner()
+				_, err := SignNewTx(key, signer, legacyTx)
+				if !errors.Is(err, ErrInvalidSig) {
+					t.Fatal("expected signature values error, no nil result or panic")
+				}
+			})
+			// test Blob tx specifically, since the signature value types changed
+			t.Run("blobtx", func(t *testing.T) {
+				blobtx := createEmptyBlobTxInner(false)
+				_, err := SignNewTx(key, signer, blobtx)
+				if !errors.Is(err, ErrInvalidSig) {
+					t.Fatal("expected signature values error, no nil result or panic")
+				}
+			})
+		})
+	}
+}
+
+func createTestLegacyTxInner() *LegacyTx {
+	return &LegacyTx{
+		Nonce:    uint64(0),
+		To:       nil,
+		Value:    big.NewInt(0),
+		Gas:      params.TxGas,
+		GasPrice: big.NewInt(params.GWei),
+		Data:     nil,
 	}
 }

@@ -1,28 +1,28 @@
-// Copyright 2019 The Elastos.ELA.SideChain.ESC Authors
-// This file is part of Elastos.ELA.SideChain.ESC.
+// Copyright 2019 The go-ethereum Authors
+// This file is part of go-ethereum.
 //
-// Elastos.ELA.SideChain.ESC is free software: you can redistribute it and/or modify
+// go-ethereum is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
 // the Free Software Foundation, either version 3 of the License, or
 // (at your option) any later version.
 //
-// Elastos.ELA.SideChain.ESC is distributed in the hope that it will be useful,
+// go-ethereum is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
 // MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
 // GNU General Public License for more details.
 //
 // You should have received a copy of the GNU General Public License
-// along with Elastos.ELA.SideChain.ESC. If not, see <http://www.gnu.org/licenses/>.
+// along with go-ethereum. If not, see <http://www.gnu.org/licenses/>.
 
 package main
 
 import (
 	"bytes"
+	"cmp"
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
 	"os"
-	"sort"
+	"slices"
 	"time"
 
 	"github.com/elastos/Elastos.ELA.SideChain.ESC/common"
@@ -66,29 +66,55 @@ func writeNodesJSON(file string, nodes nodeSet) {
 		os.Stdout.Write(nodesJSON)
 		return
 	}
-	if err := ioutil.WriteFile(file, nodesJSON, 0644); err != nil {
+	if err := os.WriteFile(file, nodesJSON, 0644); err != nil {
 		exit(err)
 	}
 }
 
+// nodes returns the node records contained in the set.
 func (ns nodeSet) nodes() []*enode.Node {
 	result := make([]*enode.Node, 0, len(ns))
 	for _, n := range ns {
 		result = append(result, n.N)
 	}
 	// Sort by ID.
-	sort.Slice(result, func(i, j int) bool {
-		return bytes.Compare(result[i].ID().Bytes(), result[j].ID().Bytes()) < 0
+	slices.SortFunc(result, func(a, b *enode.Node) int {
+		return bytes.Compare(a.ID().Bytes(), b.ID().Bytes())
 	})
 	return result
 }
 
+// add ensures the given nodes are present in the set.
 func (ns nodeSet) add(nodes ...*enode.Node) {
 	for _, n := range nodes {
-		ns[n.ID()] = nodeJSON{Seq: n.Seq(), N: n}
+		v := ns[n.ID()]
+		v.N = n
+		v.Seq = n.Seq()
+		ns[n.ID()] = v
 	}
 }
 
+// topN returns the top n nodes by score as a new set.
+func (ns nodeSet) topN(n int) nodeSet {
+	if n >= len(ns) {
+		return ns
+	}
+
+	byscore := make([]nodeJSON, 0, len(ns))
+	for _, v := range ns {
+		byscore = append(byscore, v)
+	}
+	slices.SortFunc(byscore, func(a, b nodeJSON) int {
+		return cmp.Compare(b.Score, a.Score)
+	})
+	result := make(nodeSet, n)
+	for _, v := range byscore[:n] {
+		result[v.N.ID()] = v
+	}
+	return result
+}
+
+// verify performs integrity checks on the node set.
 func (ns nodeSet) verify() error {
 	for id, n := range ns {
 		if n.N.ID() != id {

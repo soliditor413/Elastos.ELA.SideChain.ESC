@@ -1,18 +1,18 @@
-// Copyright 2017 The Elastos.ELA.SideChain.ESC Authors
-// This file is part of the Elastos.ELA.SideChain.ESC library.
+// Copyright 2017 The go-ethereum Authors
+// This file is part of the go-ethereum library.
 //
-// The Elastos.ELA.SideChain.ESC library is free software: you can redistribute it and/or modify
+// The go-ethereum library is free software: you can redistribute it and/or modify
 // it under the terms of the GNU Lesser General Public License as published by
 // the Free Software Foundation, either version 3 of the License, or
 // (at your option) any later version.
 //
-// The Elastos.ELA.SideChain.ESC library is distributed in the hope that it will be useful,
+// The go-ethereum library is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
 // MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
 // GNU Lesser General Public License for more details.
 //
 // You should have received a copy of the GNU Lesser General Public License
-// along with the Elastos.ELA.SideChain.ESC library. If not, see <http://www.gnu.org/licenses/>.
+// along with the go-ethereum library. If not, see <http://www.gnu.org/licenses/>.
 
 package keystore
 
@@ -22,12 +22,13 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 
-	mapset "github.com/deckarep/golang-set"
+	mapset "github.com/deckarep/golang-set/v2"
 	"github.com/elastos/Elastos.ELA.SideChain.ESC/accounts"
 	"github.com/elastos/Elastos.ELA.SideChain.ESC/common"
 	"github.com/elastos/Elastos.ELA.SideChain.ESC/log"
@@ -38,14 +39,12 @@ import (
 // exist yet, the code will attempt to create a watcher at most this often.
 const minReloadInterval = 2 * time.Second
 
-type accountsByURL []accounts.Account
+// byURL defines the sorting order for accounts.
+func byURL(a, b accounts.Account) int {
+	return a.URL.Cmp(b.URL)
+}
 
-func (s accountsByURL) Len() int           { return len(s) }
-func (s accountsByURL) Less(i, j int) bool { return s[i].URL.Cmp(s[j].URL) < 0 }
-func (s accountsByURL) Swap(i, j int)      { s[i], s[j] = s[j], s[i] }
-
-// AmbiguousAddrError is returned when attempting to unlock
-// an address for which more than one file exists.
+// AmbiguousAddrError is returned when an address matches multiple files.
 type AmbiguousAddrError struct {
 	Addr    common.Address
 	Matches []accounts.Account
@@ -67,7 +66,7 @@ type accountCache struct {
 	keydir   string
 	watcher  *watcher
 	mu       sync.Mutex
-	all      accountsByURL
+	all      []accounts.Account
 	byAddr   map[common.Address][]accounts.Account
 	throttle *time.Timer
 	notify   chan struct{}
@@ -79,7 +78,7 @@ func newAccountCache(keydir string) (*accountCache, chan struct{}) {
 		keydir: keydir,
 		byAddr: make(map[common.Address][]accounts.Account),
 		notify: make(chan struct{}, 1),
-		fileC:  fileCache{all: mapset.NewThreadUnsafeSet()},
+		fileC:  fileCache{all: mapset.NewThreadUnsafeSet[string]()},
 	}
 	ac.watcher = newWatcher(ac)
 	return ac, ac.notify
@@ -146,6 +145,14 @@ func (ac *accountCache) deleteByFile(path string) {
 	}
 }
 
+// watcherStarted returns true if the watcher loop started running (even if it
+// has since also ended).
+func (ac *accountCache) watcherStarted() bool {
+	ac.mu.Lock()
+	defer ac.mu.Unlock()
+	return ac.watcher.running || ac.watcher.runEnded
+}
+
 func removeAccount(slice []accounts.Account, elem accounts.Account) []accounts.Account {
 	for i := range slice {
 		if slice[i] == elem {
@@ -186,7 +193,7 @@ func (ac *accountCache) find(a accounts.Account) (accounts.Account, error) {
 	default:
 		err := &AmbiguousAddrError{Addr: a.Address, Matches: make([]accounts.Account, len(matches))}
 		copy(err.Matches, matches)
-		sort.Sort(accountsByURL(err.Matches))
+		slices.SortFunc(err.Matches, byURL)
 		return accounts.Account{}, err
 	}
 }
@@ -262,7 +269,7 @@ func (ac *accountCache) scanAccounts() error {
 		switch {
 		case err != nil:
 			log.Debug("Failed to decode keystore key", "path", path, "err", err)
-		case (addr == common.Address{}):
+		case addr == common.Address{}:
 			log.Debug("Failed to decode keystore key", "path", path, "err", "missing or zero address")
 		default:
 			return &accounts.Account{
@@ -275,16 +282,15 @@ func (ac *accountCache) scanAccounts() error {
 	// Process all the file diffs
 	start := time.Now()
 
-	for _, p := range creates.ToSlice() {
-		if a := readAccount(p.(string)); a != nil {
+	for _, path := range creates.ToSlice() {
+		if a := readAccount(path); a != nil {
 			ac.add(*a)
 		}
 	}
-	for _, p := range deletes.ToSlice() {
-		ac.deleteByFile(p.(string))
+	for _, path := range deletes.ToSlice() {
+		ac.deleteByFile(path)
 	}
-	for _, p := range updates.ToSlice() {
-		path := p.(string)
+	for _, path := range updates.ToSlice() {
 		ac.deleteByFile(path)
 		if a := readAccount(path); a != nil {
 			ac.add(*a)

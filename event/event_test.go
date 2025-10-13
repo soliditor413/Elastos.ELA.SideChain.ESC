@@ -1,18 +1,18 @@
-// Copyright 2014 The Elastos.ELA.SideChain.ESC Authors
-// This file is part of the Elastos.ELA.SideChain.ESC library.
+// Copyright 2014 The go-ethereum Authors
+// This file is part of the go-ethereum library.
 //
-// The Elastos.ELA.SideChain.ESC library is free software: you can redistribute it and/or modify
+// The go-ethereum library is free software: you can redistribute it and/or modify
 // it under the terms of the GNU Lesser General Public License as published by
 // the Free Software Foundation, either version 3 of the License, or
 // (at your option) any later version.
 //
-// The Elastos.ELA.SideChain.ESC library is distributed in the hope that it will be useful,
+// The go-ethereum library is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
 // MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
 // GNU Lesser General Public License for more details.
 //
 // You should have received a copy of the GNU Lesser General Public License
-// along with the Elastos.ELA.SideChain.ESC library. If not, see <http://www.gnu.org/licenses/>.
+// along with the go-ethereum library. If not, see <http://www.gnu.org/licenses/>.
 
 package event
 
@@ -29,7 +29,7 @@ func TestSubCloseUnsub(t *testing.T) {
 	// the point of this test is **not** to panic
 	var mux TypeMux
 	mux.Stop()
-	sub := mux.Subscribe(int(0))
+	sub := mux.Subscribe(0)
 	sub.Unsubscribe()
 }
 
@@ -100,7 +100,6 @@ func TestSubscribeDuplicateType(t *testing.T) {
 }
 
 func TestMuxConcurrent(t *testing.T) {
-	rand.Seed(time.Now().Unix())
 	mux := new(TypeMux)
 	defer mux.Stop()
 
@@ -203,6 +202,7 @@ func BenchmarkPostConcurrent(b *testing.B) {
 // for comparison
 func BenchmarkChanSend(b *testing.B) {
 	c := make(chan interface{})
+	defer close(c)
 	closed := make(chan struct{})
 	go func() {
 		for range c {

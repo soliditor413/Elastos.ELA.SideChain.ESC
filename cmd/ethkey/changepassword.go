@@ -1,37 +1,37 @@
-// Copyright 2018 The Elastos.ELA.SideChain.ESC Authors
-// This file is part of Elastos.ELA.SideChain.ESC.
+// Copyright 2018 The go-ethereum Authors
+// This file is part of go-ethereum.
 //
-// Elastos.ELA.SideChain.ESC is free software: you can redistribute it and/or modify
+// go-ethereum is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
 // the Free Software Foundation, either version 3 of the License, or
 // (at your option) any later version.
 //
-// Elastos.ELA.SideChain.ESC is distributed in the hope that it will be useful,
+// go-ethereum is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
 // MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
 // GNU General Public License for more details.
 //
 // You should have received a copy of the GNU General Public License
-// along with Elastos.ELA.SideChain.ESC. If not, see <http://www.gnu.org/licenses/>.
+// along with go-ethereum. If not, see <http://www.gnu.org/licenses/>.
 
 package main
 
 import (
 	"fmt"
-	"io/ioutil"
+	"os"
 	"strings"
 
 	"github.com/elastos/Elastos.ELA.SideChain.ESC/accounts/keystore"
 	"github.com/elastos/Elastos.ELA.SideChain.ESC/cmd/utils"
-	"gopkg.in/urfave/cli.v1"
+	"github.com/urfave/cli/v2"
 )
 
-var newPassphraseFlag = cli.StringFlag{
+var newPassphraseFlag = &cli.StringFlag{
 	Name:  "newpasswordfile",
 	Usage: "the file that contains the new password for the keyfile",
 }
 
-var commandChangePassphrase = cli.Command{
+var commandChangePassphrase = &cli.Command{
 	Name:      "changepassword",
 	Usage:     "change the password on a keyfile",
 	ArgsUsage: "<keyfile>",
@@ -45,13 +45,13 @@ Change the password of a keyfile.`,
 		keyfilepath := ctx.Args().First()
 
 		// Read key from file.
-		keyjson, err := ioutil.ReadFile(keyfilepath)
+		keyjson, err := os.ReadFile(keyfilepath)
 		if err != nil {
 			utils.Fatalf("Failed to read the keyfile at '%s': %v", keyfilepath, err)
 		}
 
 		// Decrypt key with passphrase.
-		passphrase := getPassphrase(ctx)
+		passphrase := getPassphrase(ctx, false)
 		key, err := keystore.DecryptKey(keyjson, passphrase)
 		if err != nil {
 			utils.Fatalf("Error decrypting key: %v", err)
@@ -61,13 +61,13 @@ Change the password of a keyfile.`,
 		fmt.Println("Please provide a new password")
 		var newPhrase string
 		if passFile := ctx.String(newPassphraseFlag.Name); passFile != "" {
-			content, err := ioutil.ReadFile(passFile)
+			content, err := os.ReadFile(passFile)
 			if err != nil {
 				utils.Fatalf("Failed to read new password file '%s': %v", passFile, err)
 			}
 			newPhrase = strings.TrimRight(string(content), "\r\n")
 		} else {
-			newPhrase = promptPassphrase(true)
+			newPhrase = utils.GetPassPhrase("", true)
 		}
 
 		// Encrypt the key with the new passphrase.
@@ -77,7 +77,7 @@ Change the password of a keyfile.`,
 		}
 
 		// Then write the new keyfile in place of the old one.
-		if err := ioutil.WriteFile(keyfilepath, newJson, 600); err != nil {
+		if err := os.WriteFile(keyfilepath, newJson, 0600); err != nil {
 			utils.Fatalf("Error writing new keyfile to disk: %v", err)
 		}
 

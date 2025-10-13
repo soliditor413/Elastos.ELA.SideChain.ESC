@@ -3,7 +3,7 @@
 These data types are defined in the channel between clef and the UI
 ### SignDataRequest
 
-SignDataRequest contains information about a pending request to sign some data. The data to be signed can be of various types, defined by content-type. Clef has done most of the work in canonicalizing and making sense of the data, and it's up to the UI to presentthe user with the contents of the `message`
+SignDataRequest contains information about a pending request to sign some data. The data to be signed can be of various types, defined by content-type. Clef has done most of the work in canonicalizing and making sense of the data, and it's up to the UI to present the user with the contents of the `message`
 
 Example:
 ```json
@@ -21,7 +21,7 @@ Example:
   "hash": "0xd9eba16ed0ecae432b71fe008c98cc872bb4cc214d3220a36f365326cf807d68",
   "meta": {
     "remote": "localhost:9999",
-    "local": "localhost:20636",
+    "local": "localhost:8545",
     "scheme": "http",
     "User-Agent": "Firefox 3.2",
     "Origin": "www.malicious.ru"
@@ -75,12 +75,12 @@ Example:
     },
     {
       "type": "Info",
-      "message": "User should see this aswell"
+      "message": "User should see this as well"
     }
   ],
   "meta": {
     "remote": "localhost:9999",
-    "local": "localhost:20636",
+    "local": "localhost:8545",
     "scheme": "http",
     "User-Agent": "Firefox 3.2",
     "Origin": "www.malicious.ru"
@@ -196,7 +196,7 @@ Example:
   ],
   "meta": {
     "remote": "localhost:9999",
-    "local": "localhost:20636",
+    "local": "localhost:8545",
     "scheme": "http",
     "User-Agent": "Firefox 3.2",
     "Origin": "www.malicious.ru"

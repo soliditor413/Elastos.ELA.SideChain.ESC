@@ -1,24 +1,23 @@
-// Copyright 2016 The Elastos.ELA.SideChain.ESC Authors
-// This file is part of the Elastos.ELA.SideChain.ESC library.
+// Copyright 2016 The go-ethereum Authors
+// This file is part of the go-ethereum library.
 //
-// The Elastos.ELA.SideChain.ESC library is free software: you can redistribute it and/or modify
+// The go-ethereum library is free software: you can redistribute it and/or modify
 // it under the terms of the GNU Lesser General Public License as published by
 // the Free Software Foundation, either version 3 of the License, or
 // (at your option) any later version.
 //
-// The Elastos.ELA.SideChain.ESC library is distributed in the hope that it will be useful,
+// The go-ethereum library is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
 // MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
 // GNU Lesser General Public License for more details.
 //
 // You should have received a copy of the GNU Lesser General Public License
-// along with the Elastos.ELA.SideChain.ESC library. If not, see <http://www.gnu.org/licenses/>.
+// along with the go-ethereum library. If not, see <http://www.gnu.org/licenses/>.
 
 package abi
 
 import (
 	"bytes"
-	"errors"
 	"fmt"
 	"strings"
 
@@ -32,7 +31,7 @@ type Error struct {
 	str    string
 
 	// Sig contains the string signature according to the ABI spec.
-	// e.g.	 error foo(uint32 a, int b) = "foo(uint32,int256)"
+	// e.g. error foo(uint32 a, int b) = "foo(uint32,int256)"
 	// Please note that "int" is substitute for its canonical representation "int256"
 	Sig string
 
@@ -78,16 +77,16 @@ func NewError(name string, inputs Arguments) Error {
 	}
 }
 
-func (e *Error) String() string {
+func (e Error) String() string {
 	return e.str
 }
 
 func (e *Error) Unpack(data []byte) (interface{}, error) {
 	if len(data) < 4 {
-		return "", errors.New("invalid data for unpacking")
+		return "", fmt.Errorf("insufficient data for unpacking: have %d, want at least 4", len(data))
 	}
 	if !bytes.Equal(data[:4], e.ID[:4]) {
-		return "", errors.New("invalid data for unpacking")
+		return "", fmt.Errorf("invalid identifier, have %#x want %#x", data[:4], e.ID[:4])
 	}
 	return e.Inputs.Unpack(data[4:])
 }

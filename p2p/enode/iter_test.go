@@ -1,24 +1,25 @@
-// Copyright 2019 The Elastos.ELA.SideChain.ESC Authors
-// This file is part of the Elastos.ELA.SideChain.ESC library.
+// Copyright 2019 The go-ethereum Authors
+// This file is part of the go-ethereum library.
 //
-// The Elastos.ELA.SideChain.ESC library is free software: you can redistribute it and/or modify
+// The go-ethereum library is free software: you can redistribute it and/or modify
 // it under the terms of the GNU Lesser General Public License as published by
 // the Free Software Foundation, either version 3 of the License, or
 // (at your option) any later version.
 //
-// The Elastos.ELA.SideChain.ESC library is distributed in the hope that it will be useful,
+// The go-ethereum library is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
 // MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
 // GNU Lesser General Public License for more details.
 //
 // You should have received a copy of the GNU Lesser General Public License
-// along with the Elastos.ELA.SideChain.ESC library. If not, see <http://www.gnu.org/licenses/>.
+// along with the go-ethereum library. If not, see <http://www.gnu.org/licenses/>.
 
 package enode
 
 import (
 	"encoding/binary"
 	"runtime"
+	"slices"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -75,7 +76,7 @@ func checkNodes(t *testing.T, nodes []*Node, wantLen int) {
 		t.Errorf("slice has %d nodes, want %d", len(nodes), wantLen)
 		return
 	}
-	seen := make(map[ID]bool)
+	seen := make(map[ID]bool, len(nodes))
 	for i, e := range nodes {
 		if e == nil {
 			t.Errorf("nil node at index %d", i)
@@ -183,6 +184,53 @@ func TestFairMixRemoveSource(t *testing.T) {
 	}
 }
 
+// This checks that FairMix correctly returns the name of the source that produced the node.
+func TestFairMixSourceName(t *testing.T) {
+	nodes := make([]*Node, 6)
+	for i := range nodes {
+		nodes[i] = testNode(uint64(i), uint64(i))
+	}
+	mix := NewFairMix(-1)
+	mix.AddSource(WithSourceName("s1", IterNodes(nodes[0:2])))
+	mix.AddSource(WithSourceName("s2", IterNodes(nodes[2:4])))
+	mix.AddSource(WithSourceName("s3", IterNodes(nodes[4:6])))
+
+	var names []string
+	for range nodes {
+		mix.Next()
+		names = append(names, mix.NodeSource())
+	}
+	want := []string{"s2", "s3", "s1", "s2", "s3", "s1"}
+	if !slices.Equal(names, want) {
+		t.Fatalf("wrong names: %v", names)
+	}
+}
+
+// This checks that FairMix returns the name of the source that produced the node,
+// even when FairMix instances are nested.
+func TestFairMixNestedSourceName(t *testing.T) {
+	nodes := make([]*Node, 6)
+	for i := range nodes {
+		nodes[i] = testNode(uint64(i), uint64(i))
+	}
+	mix := NewFairMix(-1)
+	mix.AddSource(WithSourceName("s1", IterNodes(nodes[0:2])))
+	submix := NewFairMix(-1)
+	submix.AddSource(WithSourceName("s2", IterNodes(nodes[2:4])))
+	submix.AddSource(WithSourceName("s3", IterNodes(nodes[4:6])))
+	mix.AddSource(submix)
+
+	var names []string
+	for range nodes {
+		mix.Next()
+		names = append(names, mix.NodeSource())
+	}
+	want := []string{"s3", "s1", "s2", "s1", "s3", "s2"}
+	if !slices.Equal(names, want) {
+		t.Fatalf("wrong names: %v", names)
+	}
+}
+
 type blockingIter chan struct{}
 
 func (it blockingIter) Next() bool {
@@ -231,7 +279,7 @@ func testMixerClose(t *testing.T) {
 }
 
 func idPrefixDistribution(nodes []*Node) map[uint32]int {
-	d := make(map[uint32]int)
+	d := make(map[uint32]int, len(nodes))
 	for _, node := range nodes {
 		id := node.ID()
 		d[binary.BigEndian.Uint32(id[:4])]++
@@ -268,7 +316,7 @@ func (s *genIter) Node() *Node {
 }
 
 func (s *genIter) Close() {
-	s.index = ^uint32(0)
+	atomic.StoreUint32(&s.index, ^uint32(0))
 }
 
 func testNode(id, seq uint64) *Node {

@@ -1,128 +1,161 @@
-// Copyright 2017 The Elastos.ELA.SideChain.ESC Authors
-// This file is part of Elastos.ELA.SideChain.ESC.
+// Copyright 2017 The go-ethereum Authors
+// This file is part of go-ethereum.
 //
-// Elastos.ELA.SideChain.ESC is free software: you can redistribute it and/or modify
+// go-ethereum is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
 // the Free Software Foundation, either version 3 of the License, or
 // (at your option) any later version.
 //
-// Elastos.ELA.SideChain.ESC is distributed in the hope that it will be useful,
+// go-ethereum is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
 // MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
 // GNU General Public License for more details.
 //
 // You should have received a copy of the GNU General Public License
-// along with Elastos.ELA.SideChain.ESC. If not, see <http://www.gnu.org/licenses/>.
+// along with go-ethereum. If not, see <http://www.gnu.org/licenses/>.
 
 package main
 
 import (
+	"bufio"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"github.com/elastos/Elastos.ELA.SideChain.ESC/eth/tracers/logger"
-	"io/ioutil"
 	"os"
+	"regexp"
+	"slices"
 
-	"github.com/elastos/Elastos.ELA.SideChain.ESC/core/state"
+	"github.com/elastos/Elastos.ELA.SideChain.ESC/common"
+	"github.com/elastos/Elastos.ELA.SideChain.ESC/core/rawdb"
 	"github.com/elastos/Elastos.ELA.SideChain.ESC/core/vm"
-	"github.com/elastos/Elastos.ELA.SideChain.ESC/log"
+	"github.com/elastos/Elastos.ELA.SideChain.ESC/internal/flags"
 	"github.com/elastos/Elastos.ELA.SideChain.ESC/tests"
-
-	cli "gopkg.in/urfave/cli.v1"
+	"github.com/urfave/cli/v2"
 )
 
-var stateTestCommand = cli.Command{
+var (
+	forkFlag = &cli.StringFlag{
+		Name:     "statetest.fork",
+		Usage:    "Only run tests for the specified fork.",
+		Category: flags.VMCategory,
+	}
+	idxFlag = &cli.IntFlag{
+		Name:     "statetest.index",
+		Usage:    "The index of the subtest to run.",
+		Category: flags.VMCategory,
+		Value:    -1, // default to select all subtest indices
+	}
+)
+var stateTestCommand = &cli.Command{
 	Action:    stateTestCmd,
 	Name:      "statetest",
-	Usage:     "executes the given state tests",
+	Usage:     "Executes the given state tests. Filenames can be fed via standard input (batch mode) or as an argument (one-off execution).",
 	ArgsUsage: "<file>",
-}
-
-// StatetestResult contains the execution status after running a state test, any
-// error that might have occurred and a dump of the final state if requested.
-type StatetestResult struct {
-	Name  string      `json:"name"`
-	Pass  bool        `json:"pass"`
-	Fork  string      `json:"fork"`
-	Error string      `json:"error,omitempty"`
-	State *state.Dump `json:"state,omitempty"`
+	Flags: slices.Concat([]cli.Flag{
+		BenchFlag,
+		DumpFlag,
+		forkFlag,
+		HumanReadableFlag,
+		idxFlag,
+		RunFlag,
+	}, traceFlags),
 }
 
 func stateTestCmd(ctx *cli.Context) error {
-	if len(ctx.Args().First()) == 0 {
-		return errors.New("path-to-test argument required")
-	}
-	// Configure the Elastos.ELA.SideChain.ESC logger
-	glogger := log.NewGlogHandler(log.StreamHandler(os.Stderr, log.TerminalFormat(false)))
-	glogger.Verbosity(log.Lvl(ctx.GlobalInt(VerbosityFlag.Name)))
-	log.Root().SetHandler(glogger)
+	path := ctx.Args().First()
 
-	// Configure the EVM logger
-	config := &logger.Config{
-		EnableMemory: !ctx.GlobalBool(DisableMemoryFlag.Name),
-		DisableStack: ctx.GlobalBool(DisableStackFlag.Name),
-	}
-	var (
-		tracer   vm.EVMLogger
-		debugger *logger.StructLogger
-	)
-	switch {
-	case ctx.GlobalBool(MachineFlag.Name):
-		tracer = logger.NewJSONLogger(config, os.Stderr)
-
-	case ctx.GlobalBool(DebugFlag.Name):
-		debugger = logger.NewStructLogger(config)
-		tracer = debugger
-
-	default:
-		debugger = logger.NewStructLogger(config)
-	}
-	// Load the test content from the input file
-	src, err := ioutil.ReadFile(ctx.Args().First())
-	if err != nil {
-		return err
-	}
-	var tests map[string]tests.StateTest
-	if err = json.Unmarshal(src, &tests); err != nil {
-		return err
-	}
-	// Iterate over all the tests, run them and aggregate the results
-	cfg := vm.Config{
-		Tracer: tracer,
-		Debug:  ctx.GlobalBool(DebugFlag.Name) || ctx.GlobalBool(MachineFlag.Name),
-	}
-	results := make([]StatetestResult, 0, len(tests))
-	for key, test := range tests {
-		for _, st := range test.Subtests() {
-			// Run the test and aggregate the result
-			result := &StatetestResult{Name: key, Fork: st.Fork, Pass: true}
-			state, err := test.Run(st, cfg)
-			// print state root for evmlab tracing
-			if ctx.GlobalBool(MachineFlag.Name) && state != nil {
-				fmt.Fprintf(os.Stderr, "{\"stateRoot\": \"%x\"}\n", state.IntermediateRoot(false))
-			}
+	// If path is provided, run the tests at that path.
+	if len(path) != 0 {
+		var (
+			collected = collectFiles(path)
+			results   []testResult
+		)
+		for _, fname := range collected {
+			r, err := runStateTest(ctx, fname)
 			if err != nil {
-				// Test failed, mark as so and dump any state to aid debugging
-				result.Pass, result.Error = false, err.Error()
-				if ctx.GlobalBool(DumpFlag.Name) && state != nil {
-					dump := state.RawDump(false, false, true)
-					result.State = &dump
-				}
+				return err
 			}
+			results = append(results, r...)
+		}
+		report(ctx, results)
+		return nil
+	}
+	// Otherwise, read filenames from stdin and execute back-to-back.
+	scanner := bufio.NewScanner(os.Stdin)
+	for scanner.Scan() {
+		fname := scanner.Text()
+		if len(fname) == 0 {
+			return nil
+		}
+		results, err := runStateTest(ctx, fname)
+		if err != nil {
+			return err
+		}
+		report(ctx, results)
+	}
+	return nil
+}
 
+// runStateTest loads the state-test given by fname, and executes the test.
+func runStateTest(ctx *cli.Context, fname string) ([]testResult, error) {
+	src, err := os.ReadFile(fname)
+	if err != nil {
+		return nil, err
+	}
+	var testsByName map[string]tests.StateTest
+	if err := json.Unmarshal(src, &testsByName); err != nil {
+		return nil, fmt.Errorf("unable to read test file %s: %w", fname, err)
+	}
+
+	cfg := vm.Config{Tracer: tracerFromFlags(ctx)}
+	re, err := regexp.Compile(ctx.String(RunFlag.Name))
+	if err != nil {
+		return nil, fmt.Errorf("invalid regex -%s: %v", RunFlag.Name, err)
+	}
+
+	// Iterate over all the tests, run them and aggregate the results
+	results := make([]testResult, 0, len(testsByName))
+	for key, test := range testsByName {
+		if !re.MatchString(key) {
+			continue
+		}
+		for i, st := range test.Subtests() {
+			if idx := ctx.Int(idxFlag.Name); idx != -1 && idx != i {
+				// If specific index requested, skip all tests that do not match.
+				continue
+			}
+			if fork := ctx.String(forkFlag.Name); fork != "" && st.Fork != fork {
+				// If specific fork requested, skip all tests that do not match.
+				continue
+			}
+			// Run the test and aggregate the result
+			result := &testResult{Name: key, Fork: st.Fork, Pass: true}
+			test.Run(st, cfg, false, rawdb.HashScheme, func(err error, state *tests.StateTestState) {
+				var root common.Hash
+				if state.StateDB != nil {
+					root = state.StateDB.IntermediateRoot(false)
+					result.Root = &root
+					fmt.Fprintf(os.Stderr, "{\"stateRoot\": \"%#x\"}\n", root)
+					// Dump any state to aid debugging.
+					if ctx.Bool(DumpFlag.Name) {
+						result.State = dump(state.StateDB)
+					}
+				}
+				// Collect bench stats if requested.
+				if ctx.Bool(BenchFlag.Name) {
+					_, stats, _ := timedExec(true, func() ([]byte, uint64, error) {
+						_, _, gasUsed, _ := test.RunNoVerify(st, cfg, false, rawdb.HashScheme)
+						return nil, gasUsed, nil
+					})
+					result.Stats = &stats
+				}
+				if err != nil {
+					// Test failed, mark as so.
+					result.Pass, result.Error = false, err.Error()
+					return
+				}
+			})
 			results = append(results, *result)
-
-			// Print any structured logs collected
-			if ctx.GlobalBool(DebugFlag.Name) {
-				if debugger != nil {
-					fmt.Fprintln(os.Stderr, "#### TRACE ####")
-					logger.WriteTrace(os.Stderr, debugger.StructLogs())
-				}
-			}
 		}
 	}
-	out, _ := json.MarshalIndent(results, "", "  ")
-	fmt.Println(string(out))
-	return nil
+	return results, nil
 }

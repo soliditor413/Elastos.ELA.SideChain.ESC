@@ -1,18 +1,18 @@
-// Copyright 2019 The Elastos.ELA.SideChain.ESC Authors
-// This file is part of the Elastos.ELA.SideChain.ESC library.
+// Copyright 2019 The go-ethereum Authors
+// This file is part of the go-ethereum library.
 //
-// The Elastos.ELA.SideChain.ESC library is free software: you can redistribute it and/or modify
+// The go-ethereum library is free software: you can redistribute it and/or modify
 // it under the terms of the GNU Lesser General Public License as published by
 // the Free Software Foundation, either version 3 of the License, or
 // (at your option) any later version.
 //
-// The Elastos.ELA.SideChain.ESC library is distributed in the hope that it will be useful,
+// The go-ethereum library is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
 // MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
 // GNU Lesser General Public License for more details.
 //
 // You should have received a copy of the GNU Lesser General Public License
-// along with the Elastos.ELA.SideChain.ESC library. If not, see <http://www.gnu.org/licenses/>.
+// along with the go-ethereum library. If not, see <http://www.gnu.org/licenses/>.
 
 package fourbyte
 
@@ -20,21 +20,25 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"math/big"
 
 	"github.com/elastos/Elastos.ELA.SideChain.ESC/common"
-	"github.com/elastos/Elastos.ELA.SideChain.ESC/signer/core"
+	"github.com/elastos/Elastos.ELA.SideChain.ESC/signer/core/apitypes"
 )
 
 // ValidateTransaction does a number of checks on the supplied transaction, and
 // returns either a list of warnings, or an error (indicating that the transaction
 // should be immediately rejected).
-func (db *Database) ValidateTransaction(selector *string, tx *core.SendTxArgs) (*core.ValidationMessages, error) {
-	messages := new(core.ValidationMessages)
+func (db *Database) ValidateTransaction(selector *string, tx *apitypes.SendTxArgs) (*apitypes.ValidationMessages, error) {
+	messages := new(apitypes.ValidationMessages)
 
 	// Prevent accidental erroneous usage of both 'input' and 'data' (show stopper)
 	if tx.Data != nil && tx.Input != nil && !bytes.Equal(*tx.Data, *tx.Input) {
 		return nil, errors.New(`ambiguous request: both "data" and "input" are set and are not identical`)
+	}
+	// ToTransaction validates, among other things, that blob hashes match with blobs, and also
+	// populates the hashes if they were previously unset.
+	if _, err := tx.ToTransaction(); err != nil {
+		return nil, err
 	}
 	// Place data on 'data', and nil 'input'
 	var data []byte
@@ -52,7 +56,7 @@ func (db *Database) ValidateTransaction(selector *string, tx *core.SendTxArgs) (
 		// e.g. https://github.com/elastos/Elastos.ELA.SideChain.ESC/issues/16106.
 		if len(data) == 0 {
 			// Prevent sending ether into black hole (show stopper)
-			if tx.Value.ToInt().Cmp(big.NewInt(0)) > 0 {
+			if tx.Value.ToInt().Sign() > 0 {
 				return nil, errors.New("transaction will create a contract with value but empty code")
 			}
 			// No value submitted at least, critically Warn, but don't blow up
@@ -73,14 +77,24 @@ func (db *Database) ValidateTransaction(selector *string, tx *core.SendTxArgs) (
 	if bytes.Equal(tx.To.Address().Bytes(), common.Address{}.Bytes()) {
 		messages.Crit("Transaction recipient is the zero address")
 	}
+	switch {
+	case tx.GasPrice == nil && tx.MaxFeePerGas == nil:
+		messages.Crit("Neither 'gasPrice' nor 'maxFeePerGas' specified.")
+	case tx.GasPrice == nil && tx.MaxPriorityFeePerGas == nil:
+		messages.Crit("Neither 'gasPrice' nor 'maxPriorityFeePerGas' specified.")
+	case tx.GasPrice != nil && tx.MaxFeePerGas != nil:
+		messages.Crit("Both 'gasPrice' and 'maxFeePerGas' specified.")
+	case tx.GasPrice != nil && tx.MaxPriorityFeePerGas != nil:
+		messages.Crit("Both 'gasPrice' and 'maxPriorityFeePerGas' specified.")
+	}
 	// Semantic fields validated, try to make heads or tails of the call data
-	db.validateCallData(selector, data, messages)
+	db.ValidateCallData(selector, data, messages)
 	return messages, nil
 }
 
-// validateCallData checks if the ABI call-data + method selector (if given) can
+// ValidateCallData checks if the ABI call-data + method selector (if given) can
 // be parsed and seems to match.
-func (db *Database) validateCallData(selector *string, data []byte, messages *core.ValidationMessages) {
+func (db *Database) ValidateCallData(selector *string, data []byte, messages *apitypes.ValidationMessages) {
 	// If the data is empty, we have a plain value transfer, nothing more to do
 	if len(data) == 0 {
 		return
@@ -98,7 +112,7 @@ func (db *Database) validateCallData(selector *string, data []byte, messages *co
 		if info, err := verifySelector(*selector, data); err != nil {
 			messages.Warn(fmt.Sprintf("Transaction contains data, but provided ABI signature could not be matched: %v", err))
 		} else {
-			messages.Info(info.String())
+			messages.Info(fmt.Sprintf("Transaction invokes the following method: %q", info.String()))
 			db.AddSelector(*selector, data[:4])
 		}
 		return
@@ -110,8 +124,8 @@ func (db *Database) validateCallData(selector *string, data []byte, messages *co
 		return
 	}
 	if info, err := verifySelector(embedded, data); err != nil {
-		messages.Warn(fmt.Sprintf("Transaction contains data, but provided ABI signature could not be varified: %v", err))
+		messages.Warn(fmt.Sprintf("Transaction contains data, but provided ABI signature could not be verified: %v", err))
 	} else {
-		messages.Info(info.String())
+		messages.Info(fmt.Sprintf("Transaction invokes the following method: %q", info.String()))
 	}
 }

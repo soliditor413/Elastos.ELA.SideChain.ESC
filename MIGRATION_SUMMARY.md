@@ -13,7 +13,7 @@
 
 ### 2. 包引用路径更新
 - **范围**: 所有 `.go` 文件
-- **修改**: 将所有 `github.com/ethereum/go-ethereum` 引用替换为 `github.com/elastos/Elastos.ELA.SideChain.ESC`
+- **修改**: 将所有 `github.com/elastos/Elastos.ELA.SideChain.ESC` 引用替换为 `github.com/elastos/Elastos.ELA.SideChain.ESC`
 - **方法**: 使用批量替换命令
 - **状态**: ✅ 完成
 

@@ -1,5 +1,5 @@
-// Copyright 2016 The go-ethereum Authors
-// This file is part of go-ethereum.
+// Copyright 2016 The Elastos ELA Side Chain ESC Authors
+// This file is part of Elastos ELA Side Chain ESC.
 //
 // go-ethereum is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -69,7 +69,7 @@ func TestConsoleWelcome(t *testing.T) {
 	geth.Expect(`
 Welcome to the Geth JavaScript console!
 
-instance: Geth/v{{gethver}}/{{goos}}-{{goarch}}/{{gover}}
+instance: esc/v{{gethver}}/{{goos}}-{{goarch}}/{{gover}}
 at block: 0 ({{niltime}})
  datadir: {{.Datadir}}
  modules: {{apis}}
@@ -140,7 +140,7 @@ func testAttachWelcome(t *testing.T, geth *testgeth, endpoint, apis string) {
 	attach.Expect(`
 Welcome to the Geth JavaScript console!
 
-instance: Geth/v{{gethver}}/{{goos}}-{{goarch}}/{{gover}}
+instance: esc/v{{gethver}}/{{goos}}-{{goarch}}/{{gover}}
 at block: 0 ({{niltime}}){{if ipc}}
  datadir: {{datadir}}{{end}}
  modules: {{apis}}

@@ -46,7 +46,7 @@ import (
 )
 
 const (
-	clientIdentifier = "elastos-ela-sidechain" // Client identifier to advertise over the network
+	clientIdentifier = "esc" // Client identifier to advertise over the network
 )
 
 var (

@@ -8,10 +8,10 @@ import (
 	"math/big"
 	"errors"
 
-	"github.com/ethereum/go-ethereum/accounts/abi"
-	"github.com/ethereum/go-ethereum/accounts/abi/bind/v2"
-	"github.com/ethereum/go-ethereum/common"
-	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/elastos/Elastos.ELA.SideChain.ESC/accounts/abi"
+	"github.com/elastos/Elastos.ELA.SideChain.ESC/accounts/abi/bind/v2"
+	"github.com/elastos/Elastos.ELA.SideChain.ESC/common"
+	"github.com/elastos/Elastos.ELA.SideChain.ESC/core/types"
 )
 
 // Reference imports to suppress errors if they are not otherwise used.

@@ -1,10 +1,10 @@
 package test
 
-import "github.com/ethereum/go-ethereum/common"
-import "github.com/ethereum/go-ethereum/eth"
-import "github.com/ethereum/go-ethereum/rlp"
+import "github.com/elastos/Elastos.ELA.SideChain.ESC/common"
+import "github.com/elastos/Elastos.ELA.SideChain.ESC/eth"
+import "github.com/elastos/Elastos.ELA.SideChain.ESC/rlp"
 import "io"
-import eth1 "github.com/ethereum/go-ethereum/eth/protocols/eth"
+import eth1 "github.com/elastos/Elastos.ELA.SideChain.ESC/eth/protocols/eth"
 
 func (obj *Test) EncodeRLP(_w io.Writer) error {
 	w := rlp.NewEncoderBuffer(_w)

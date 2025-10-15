@@ -519,6 +519,18 @@ type ChainConfig struct {
 	Ethash             *EthashConfig       `json:"ethash,omitempty"`
 	Clique             *CliqueConfig       `json:"clique,omitempty"`
 	BlobScheduleConfig *BlobScheduleConfig `json:"blobSchedule,omitempty"`
+
+	BlackContractAddr     string `json:"blackcontractaddr,omitempty"`
+	PassBalance           uint64 `json:"passbalance,omitempty"`
+	EvilSignersJournalDir string `json:"evilSignersJournalDir,omitempty"`
+	PreConnectOffset      uint64 `json:"preConnectOffset,omitempty"`
+	PbftKeyStore          string `json:"pbftKeyStore,omitempty"`
+	PbftKeyStorePassWord  string
+	DynamicArbiterHeight  uint64 `json:"dynamicArbiterHeight,omitempty"`
+	FrozeAccountList      []string
+	BridgeContractAddr    string
+	PledgeBillContract    string
+	DeveloperContract     []string
 }
 
 // EthashConfig is the consensus engine configs for proof-of-work based sealing.

@@ -997,6 +997,72 @@ Please note that --` + MetricsHTTPFlag.Name + ` must be set to start the server.
 		Value:    metrics.DefaultConfig.InfluxDBOrganization,
 		Category: flags.MetricsCategory,
 	}
+
+	SpvMonitoringAddrFlag = cli.StringFlag{
+		Name:  "spvmoniaddr",
+		Usage: "configue SPV module monitoring ela chain address",
+		Value: "",
+	}
+	BlackContractAddr = cli.StringFlag{
+		Name:  "black.contract.address",
+		Usage: "configue Black Contract address",
+		Value: "0xC445f9487bF570fF508eA9Ac320b59730e81e503",
+	}
+	PassBalance = cli.Int64Flag{
+		Name:  "pass.balance",
+		Usage: "configue Oracle Contract account balance",
+		Value: 1000000000000000000,
+	}
+	PbftKeyStore = cli.StringFlag{
+		Name:  "pbft.keystore",
+		Usage: "configue pbft consensus account",
+		Value: "keystore.dat",
+	}
+	PreConnectOffset = cli.Int64Flag{
+		Name:  "preconnectoffset",
+		Usage: "configue the offset blocks to pre-connect to switch to pbft consensus",
+		Value: 100,
+	}
+	PbftKeystorePassWord = cli.StringFlag{
+		Name:  "pbft.keystore.password",
+		Usage: "pbft keystore password",
+		Value: "",
+	}
+	PbftIPAddress = cli.StringFlag{
+		Name:  "pbft.net.address",
+		Usage: "connect dpos direct net ip",
+		Value: "127.0.0.1",
+	}
+	PbftDposPort = cli.StringFlag{
+		Name:  "pbft.net.port",
+		Usage: "connect dpos direct net port",
+		Value: "20639",
+	}
+	PbftMinerAddress = cli.StringFlag{
+		Name:  "pbft.miner.address",
+		Usage: "miner's account to receive transaction's fee",
+		Value: "",
+	}
+	DynamicArbiter = cli.Uint64Flag{
+		Name:  "spv.arbiter.height",
+		Usage: "configue the offset blocks to pre-connect to switch to pbft consensus",
+		Value: 1034900,
+	}
+	FrozenAccount = cli.StringSliceFlag{
+		Name:  "frozen.account.list",
+		Usage: "config the frozen account list",
+		Value: &cli.StringSlice{},
+	}
+	PledgedBillContract = cli.StringFlag{
+		Name:  "pledged.bill.address",
+		Usage: "configue pledged bill address",
+		Value: "",
+	}
+	DeveloperFeeContract = cli.StringSliceFlag{
+		Name:  "developer.fee.contract",
+		Usage: "configue developer fee contract address",
+		Value: &cli.StringSlice{},
+	}
 )
 
 var (

@@ -48,6 +48,10 @@ import (
 	"github.com/elastos/Elastos.ELA.SideChain.ESC/rpc"
 	"github.com/naoina/toml"
 	"github.com/urfave/cli/v2"
+
+	"github.com/elastos/Elastos.ELA/common/config"
+	elatx "github.com/elastos/Elastos.ELA/core/transaction"
+	"github.com/elastos/Elastos.ELA/core/types/functions"
 )
 
 var (
@@ -111,6 +115,15 @@ type gethConfig struct {
 	Node     node.Config
 	Ethstats ethstatsConfig
 	Metrics  metrics.Config
+}
+
+func init() {
+	// Initialize functions
+	functions.GetTransactionByTxType = elatx.GetTransaction
+	functions.GetTransactionByBytes = elatx.GetTransactionByBytes
+	functions.CreateTransaction = elatx.CreateTransaction
+	functions.GetTransactionParameters = elatx.GetTransactionparameters
+	config.DefaultParams = *config.GetDefaultParams()
 }
 
 func loadConfig(file string, cfg *gethConfig) error {

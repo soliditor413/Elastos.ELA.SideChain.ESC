@@ -11,14 +11,13 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/elastos/Elastos.ELA.SideChain.ESC/version"
-
 	"github.com/elastos/Elastos.ELA.SPV/bloom"
 	spv "github.com/elastos/Elastos.ELA.SPV/interface"
 	"github.com/elastos/Elastos.ELA.SPV/util"
 	ethereum "github.com/elastos/Elastos.ELA.SideChain.ESC"
 	"github.com/elastos/Elastos.ELA.SideChain.ESC/blocksigner"
 	ethCommon "github.com/elastos/Elastos.ELA.SideChain.ESC/common"
+	//"github.com/elastos/Elastos.ELA.SideChain.ESC/consensus"
 	"github.com/elastos/Elastos.ELA.SideChain.ESC/core/events"
 	"github.com/elastos/Elastos.ELA.SideChain.ESC/dpos"
 	"github.com/elastos/Elastos.ELA.SideChain.ESC/ethclient"
@@ -26,14 +25,13 @@ import (
 	"github.com/elastos/Elastos.ELA.SideChain.ESC/event"
 	"github.com/elastos/Elastos.ELA.SideChain.ESC/log"
 	"github.com/elastos/Elastos.ELA.SideChain.ESC/pledgeBill"
-	"github.com/elastos/Elastos.ELA.SideChain.ESC/rpc"
 	"github.com/elastos/Elastos.ELA.SideChain.ESC/smallcrosstx"
+	"github.com/elastos/Elastos.ELA.SideChain.ESC/version"
 
 	"golang.org/x/net/context"
 
 	"github.com/elastos/Elastos.ELA/common"
 	"github.com/elastos/Elastos.ELA/common/config"
-	"github.com/elastos/Elastos.ELA/core"
 	elatx "github.com/elastos/Elastos.ELA/core/transaction"
 	elacom "github.com/elastos/Elastos.ELA/core/types/common"
 	it "github.com/elastos/Elastos.ELA/core/types/interfaces"
@@ -132,14 +130,14 @@ type Service struct {
 }
 
 // Spv database initialization
-func SpvDbInit(spvdataDir string, pledgeBillContract string, signer ethCommon.Address, client *rpc.Client) {
+func SpvDbInit(spvdataDir string, pledgeBillContract string, signer ethCommon.Address, client *ethclient.Client) {
 	db, err := leveldb.New(filepath.Join(spvdataDir, "spv_transaction_info.db"), databaseCache, handles, "eth/db/esc/", false)
 	if err != nil {
 		log.Error("spv Open db", "err", err)
 		return
 	}
 	spvTransactiondb = db
-	ipcClient = ethclient.NewClient(client)
+	ipcClient = client
 	pledgeBill.Init(db, &transactionDBMutex, pledgeBillContract, signer, ipcClient)
 }
 
@@ -164,15 +162,7 @@ func NewService(cfg *Config, tmux *event.TypeMux, dynamicArbiterHeight uint64) (
 		GenesisBlockAddress: cfg.GenesisAddress,
 	}
 	ResetConfigWithReflect(chainParams, spvCfg)
-	fmt.Println("chainParams", chainParams)
-	fmt.Println("chainParams.foundationProgramHash", chainParams.FoundationProgramHash)
-	fmt.Println("chainParams.foundationAddress", chainParams.FoundationAddress)
-	fmt.Println("chainParams.genesisBlock", chainParams.GenesisBlock)
-	fmt.Println("chainParams.genesisBlock", *chainParams.FoundationProgramHash)
-	// GenesisBlock
-	genesisBlock := core.GenesisBlock(*chainParams.FoundationProgramHash)
-	fmt.Println("genesisBlock", genesisBlock)
-	chainParams.Sterilize() // Temporarily disabled due to nil pointer issue
+	chainParams.Sterilize()
 	spvCfg.ChainParams = chainParams
 
 	spvCfg.PermanentPeers = chainParams.PermanentPeers
@@ -898,7 +888,6 @@ func OnTx2Failed(elaTx string) {
 		log.Error(fmt.Sprintf("%s submit by: %s", elaTx, ethHash.String()))
 		return
 	}
-
 	height, err := ipcClient.BlockNumber(context.Background())
 	if err != nil {
 		log.Error("get CurrentBlockNumber failed", "error", err.Error())
@@ -1169,15 +1158,14 @@ func VerifySmallCrossTx(rawTxID, rawTx string, signatures []string,
 	//if PbftEngine == nil {
 	//	return false, errors.New("PbftEngine is nil")
 	//}
-	//var blackAddr ethCommon.Address
-	//fee, target, _ := FindOutputFeeAndaddressByTxHash(rawTxID)
-	//if fee.Uint64() > 0 || target != blackAddr {
-	//	// Indicates that it has been verified or SPV synchronized
-	//	return true, nil
-	//}
-	//
-	//return verifySmallCrossTxBySignature(rawTx, signatures, blockHeight)
-	return false, nil
+	var blackAddr ethCommon.Address
+	fee, target, _ := FindOutputFeeAndaddressByTxHash(rawTxID)
+	if fee.Uint64() > 0 || target != blackAddr {
+		// Indicates that it has been verified or SPV synchronized
+		return true, nil
+	}
+
+	return verifySmallCrossTxBySignature(rawTx, signatures, blockHeight)
 }
 
 func verifySmallCrossTxBySignature(rawTx string, signatures []string,
@@ -1252,12 +1240,12 @@ func GetMinGasPrice(spvHeight uint32) (*big.Int, error) {
 }
 
 func Close() {
-	fmt.Println("spv close 111111")
+	fmt.Println("enter spv close")
 	spvdb := SpvService.GetDatabase()
 	if spvdb != nil {
-		fmt.Println("spv close 2222222")
+		fmt.Println("spv close")
 		spvdb.Close()
 		close(stopChn)
 	}
-	fmt.Println("spv close 33333333")
+	fmt.Println("spv close end")
 }

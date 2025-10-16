@@ -354,7 +354,6 @@ func geth(ctx *cli.Context) error {
 func startNode(ctx *cli.Context, stack *node.Node, eth *eth.Ethereum, isConsole bool) {
 	// Start up the node itself
 	utils.StartNode(ctx, stack, isConsole)
-	startSpv(ctx, stack, eth)
 	if ctx.IsSet(utils.UnlockedAccountFlag.Name) {
 		log.Warn(`The "unlock" flag has been deprecated and has no effect`)
 	}
@@ -366,7 +365,7 @@ func startNode(ctx *cli.Context, stack *node.Node, eth *eth.Ethereum, isConsole 
 	// Create a client to interact with local geth node.
 	rpcClient := stack.Attach()
 	ethClient := ethclient.NewClient(rpcClient)
-
+	startSpv(ctx, stack, ethClient, eth)
 	go func() {
 		// Open any wallets already attached
 		for _, wallet := range stack.AccountManager().Wallets() {
@@ -425,7 +424,7 @@ func startNode(ctx *cli.Context, stack *node.Node, eth *eth.Ethereum, isConsole 
 	}
 }
 
-func startSpv(ctx *cli.Context, stack *node.Node, eth *eth.Ethereum) {
+func startSpv(ctx *cli.Context, stack *node.Node, client *ethclient.Client, eth *eth.Ethereum) {
 	var SpvDataDir string
 	switch {
 	case ctx.IsSet(utils.DataDirFlag.Name):
@@ -495,8 +494,7 @@ func startSpv(ctx *cli.Context, stack *node.Node, eth *eth.Ethereum) {
 
 		return addr
 	}
-	_ = dynamicArbiterHeight
-	spv.SpvDbInit(SpvDataDir, pledgedBillContract, spv.GetDefaultSingerAddr(), stack.Attach())
+	spv.SpvDbInit(SpvDataDir, pledgedBillContract, spv.GetDefaultSingerAddr(), client)
 	if spvService, err := spv.NewService(spvCfg, stack.EventMux(), dynamicArbiterHeight); err != nil {
 		utils.Fatalf("SPV service init error: %v", err)
 	} else {

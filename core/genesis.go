@@ -610,13 +610,43 @@ func EnableVerkleAtGenesis(db ethdb.Database, genesis *Genesis) (bool, error) {
 
 // DefaultGenesisBlock returns the Ethereum main net genesis block.
 func DefaultGenesisBlock() *Genesis {
+	extra := make([]byte, 0)
+	extra = append(extra, bytes.Repeat([]byte{0x00}, 32)...)
+	address1 := hexutil.MustDecode("0x5141f2c88e84c0f9b4c1876df59e2530fbdc42f2")
+	address2 := hexutil.MustDecode("0xf02090aec7d41b1880058cf5155fe030c3ec404e")
+	address3 := hexutil.MustDecode("0x08319622794adcf7c05d9e8f6d251c3309e0ec3c")
+	address4 := hexutil.MustDecode("0x8609fadecdc27e135343b7c8bdbf25f09a014582")
+	address5 := hexutil.MustDecode("0x77466b8b6fbb66ac1db38343af158b2263699678")
+	address6 := hexutil.MustDecode("0x8207c68a3345104698ae24c4847bf748a32c97d1")
+	address7 := hexutil.MustDecode("0x58f0d33873227887ecf514064e3a7b94754ecb68")
+	address8 := hexutil.MustDecode("0x470e2a9002b6aa3197cbec11f46971c73d79a8e8")
+	address9 := hexutil.MustDecode("0x0ddb5d59d98347dbbc60c63d09213e5fac0cbc6d")
+	address10 := hexutil.MustDecode("0x8f547cedf3b298182abf49be4a717db9a0d14509")
+	address11 := hexutil.MustDecode("0xfddb0ca03ffc56463ec0e6dda91c99f70a7bca50")
+	address12 := hexutil.MustDecode("0x5223c679c4bfdaee3463636ee4a8ff022b46e9eb")
+	extra = append(extra, address1...)
+	extra = append(extra, address2...)
+	extra = append(extra, address3...)
+	extra = append(extra, address4...)
+	extra = append(extra, address5...)
+	extra = append(extra, address6...)
+	extra = append(extra, address7...)
+	extra = append(extra, address8...)
+	extra = append(extra, address9...)
+	extra = append(extra, address10...)
+	extra = append(extra, address11...)
+	extra = append(extra, address12...)
+	extra = append(extra, bytes.Repeat([]byte{0x00}, 65)...)
+
 	return &Genesis{
+		Number:     0,
 		Config:     params.MainnetChainConfig,
-		Nonce:      66,
-		ExtraData:  hexutil.MustDecode("0x11bbe8db4e347b4e8c937c1c8370e4b5ed33adb3db69cbdb7a38e1e50b1b82fa"),
-		GasLimit:   5000,
-		Difficulty: big.NewInt(17179869184),
-		Alloc:      decodePrealloc(mainnetAllocData),
+		Timestamp:  0x1,
+		Nonce:      0,
+		ExtraData:  extra,
+		GasLimit:   0x2068F7700,
+		Difficulty: big.NewInt(1),
+		Alloc:      nil,
 	}
 }
 

@@ -28,7 +28,7 @@ import (
 
 // Genesis hashes to enforce below configs on.
 var (
-	MainnetGenesisHash = common.HexToHash("0xd4e56740f876aef8c010b86a40d5f56745a118d0906a34e69aec8c0db1cb8fa3")
+	MainnetGenesisHash = common.HexToHash("0x6afc2eb01956dfe192dc4cd065efdf6c3c80448776ca367a7246d279e228ff0a")
 	HoleskyGenesisHash = common.HexToHash("0xb5f7f912443c940f21fd611f12828d75b534364ed9e95ca4e307729a4661bde4")
 	SepoliaGenesisHash = common.HexToHash("0x25a5cc106eea7138acab33231d7160d69cb777ee0c2c553fcddf5138993e6dd9")
 	HoodiGenesisHash   = common.HexToHash("0xbbe312868b376a3001692a646dd2d7d1e4406380dfd86b98aa8a34d1557c971b")
@@ -41,27 +41,29 @@ var (
 
 	// MainnetChainConfig is the chain parameters to run a node on the main network.
 	MainnetChainConfig = &ChainConfig{
-		ChainID:                 big.NewInt(1),
-		HomesteadBlock:          big.NewInt(1_150_000),
-		DAOForkBlock:            big.NewInt(1_920_000),
+		OldChainID:              big.NewInt(1),
+		ChainID:                 big.NewInt(20),
+		HomesteadBlock:          big.NewInt(1),
+		DAOForkBlock:            nil,
 		DAOForkSupport:          true,
-		EIP150Block:             big.NewInt(2_463_000),
-		EIP155Block:             big.NewInt(2_675_000),
-		EIP158Block:             big.NewInt(2_675_000),
-		ByzantiumBlock:          big.NewInt(4_370_000),
-		ConstantinopleBlock:     big.NewInt(7_280_000),
-		PetersburgBlock:         big.NewInt(7_280_000),
-		IstanbulBlock:           big.NewInt(9_069_000),
-		MuirGlacierBlock:        big.NewInt(9_200_000),
-		BerlinBlock:             big.NewInt(12_244_000),
-		LondonBlock:             big.NewInt(12_965_000),
-		ArrowGlacierBlock:       big.NewInt(13_773_000),
-		GrayGlacierBlock:        big.NewInt(15_050_000),
-		TerminalTotalDifficulty: MainnetTerminalTotalDifficulty, // 58_750_000_000_000_000_000_000
-		ShanghaiTime:            newUint64(1681338455),
-		CancunTime:              newUint64(1710338135),
-		PragueTime:              newUint64(1746612311),
-		DepositContractAddress:  common.HexToAddress("0x00000000219ab540356cbb839cbe05303d7705fa"),
+		EIP150Block:             big.NewInt(2),
+		EIP155Block:             big.NewInt(3),
+		EIP158Block:             big.NewInt(3),
+		ByzantiumBlock:          big.NewInt(4),
+		ChainIDBlock:            big.NewInt(2687340),
+		ConstantinopleBlock:     big.NewInt(2426880),
+		PetersburgBlock:         big.NewInt(2426880),
+		IstanbulBlock:           big.NewInt(2426880),
+		MuirGlacierBlock:        nil,
+		BerlinBlock:             big.NewInt(19166000),
+		LondonBlock:             big.NewInt(19166000),
+		ArrowGlacierBlock:       big.NewInt(0).SetUint64(math.MaxUint64),
+		GrayGlacierBlock:        big.NewInt(0).SetUint64(math.MaxUint64),
+		TerminalTotalDifficulty: big.NewInt(0).SetUint64(math.MaxUint64), // 58_750_000_000_000_000_000_000
+		ShanghaiTime:            newUint64(1728360000),
+		CancunTime:              newUint64(math.MaxUint64),
+		PragueTime:              newUint64(math.MaxUint64),
+		DepositContractAddress:  common.HexToAddress("0x0000000000000000000000000000000000000000"),
 		Ethash:                  new(EthashConfig),
 		BlobScheduleConfig: &BlobScheduleConfig{
 			Cancun: DefaultCancunBlobConfig,
@@ -460,7 +462,8 @@ var NetworkNames = map[string]string{
 // that any network, identified by its genesis block, can have its own
 // set of configuration options.
 type ChainConfig struct {
-	ChainID *big.Int `json:"chainId"` // chainId identifies the current chain and is used for replay protection
+	OldChainID *big.Int
+	ChainID    *big.Int `json:"chainId"` // chainId identifies the current chain and is used for replay protection
 
 	HomesteadBlock *big.Int `json:"homesteadBlock,omitempty"` // Homestead switch block (nil = no fork, 0 = already homestead)
 
@@ -520,11 +523,12 @@ type ChainConfig struct {
 	Clique             *CliqueConfig       `json:"clique,omitempty"`
 	BlobScheduleConfig *BlobScheduleConfig `json:"blobSchedule,omitempty"`
 
-	BlackContractAddr     string `json:"blackcontractaddr,omitempty"`
-	PassBalance           uint64 `json:"passbalance,omitempty"`
-	EvilSignersJournalDir string `json:"evilSignersJournalDir,omitempty"`
-	PreConnectOffset      uint64 `json:"preConnectOffset,omitempty"`
-	PbftKeyStore          string `json:"pbftKeyStore,omitempty"`
+	ChainIDBlock          *big.Int `json:"chainIdBlock,omitempty"`
+	BlackContractAddr     string   `json:"blackcontractaddr,omitempty"`
+	PassBalance           uint64   `json:"passbalance,omitempty"`
+	EvilSignersJournalDir string   `json:"evilSignersJournalDir,omitempty"`
+	PreConnectOffset      uint64   `json:"preConnectOffset,omitempty"`
+	PbftKeyStore          string   `json:"pbftKeyStore,omitempty"`
 	PbftKeyStorePassWord  string
 	DynamicArbiterHeight  uint64 `json:"dynamicArbiterHeight,omitempty"`
 	FrozeAccountList      []string

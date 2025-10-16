@@ -11,6 +11,8 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/elastos/Elastos.ELA.SideChain.ESC/version"
+
 	"github.com/elastos/Elastos.ELA.SPV/bloom"
 	spv "github.com/elastos/Elastos.ELA.SPV/interface"
 	"github.com/elastos/Elastos.ELA.SPV/util"
@@ -18,26 +20,27 @@ import (
 	"github.com/elastos/Elastos.ELA.SideChain.ESC/blocksigner"
 	ethCommon "github.com/elastos/Elastos.ELA.SideChain.ESC/common"
 	"github.com/elastos/Elastos.ELA.SideChain.ESC/core/events"
-	"github.com/elastos/Elastos.ELA.SideChain.ESC/version"
-
-	//"github.com/elastos/Elastos.ELA.SideChain.ESC/dpos"
+	"github.com/elastos/Elastos.ELA.SideChain.ESC/dpos"
 	"github.com/elastos/Elastos.ELA.SideChain.ESC/ethclient"
 	"github.com/elastos/Elastos.ELA.SideChain.ESC/ethdb/leveldb"
 	"github.com/elastos/Elastos.ELA.SideChain.ESC/event"
 	"github.com/elastos/Elastos.ELA.SideChain.ESC/log"
 	"github.com/elastos/Elastos.ELA.SideChain.ESC/pledgeBill"
+	"github.com/elastos/Elastos.ELA.SideChain.ESC/rpc"
 	"github.com/elastos/Elastos.ELA.SideChain.ESC/smallcrosstx"
 
 	"golang.org/x/net/context"
 
 	"github.com/elastos/Elastos.ELA/common"
 	"github.com/elastos/Elastos.ELA/common/config"
+	"github.com/elastos/Elastos.ELA/core"
 	elatx "github.com/elastos/Elastos.ELA/core/transaction"
 	elacom "github.com/elastos/Elastos.ELA/core/types/common"
 	it "github.com/elastos/Elastos.ELA/core/types/interfaces"
 	"github.com/elastos/Elastos.ELA/core/types/outputpayload"
 	"github.com/elastos/Elastos.ELA/core/types/payload"
 	"github.com/elastos/Elastos.ELA/elanet/filter"
+	eevents "github.com/elastos/Elastos.ELA/events"
 )
 
 var (
@@ -129,14 +132,14 @@ type Service struct {
 }
 
 // Spv database initialization
-func SpvDbInit(spvdataDir string, pledgeBillContract string, signer ethCommon.Address, client *ethclient.Client) {
-	db, err := leveldb.New(filepath.Join(spvdataDir, "spv_transaction_info.db"), databaseCache, handles, "eth/db/ela/", false)
+func SpvDbInit(spvdataDir string, pledgeBillContract string, signer ethCommon.Address, client *rpc.Client) {
+	db, err := leveldb.New(filepath.Join(spvdataDir, "spv_transaction_info.db"), databaseCache, handles, "eth/db/esc/", false)
 	if err != nil {
 		log.Error("spv Open db", "err", err)
 		return
 	}
 	spvTransactiondb = db
-	ipcClient = client
+	ipcClient = ethclient.NewClient(client)
 	pledgeBill.Init(db, &transactionDBMutex, pledgeBillContract, signer, ipcClient)
 }
 
@@ -161,7 +164,15 @@ func NewService(cfg *Config, tmux *event.TypeMux, dynamicArbiterHeight uint64) (
 		GenesisBlockAddress: cfg.GenesisAddress,
 	}
 	ResetConfigWithReflect(chainParams, spvCfg)
-	chainParams.Sterilize()
+	fmt.Println("chainParams", chainParams)
+	fmt.Println("chainParams.foundationProgramHash", chainParams.FoundationProgramHash)
+	fmt.Println("chainParams.foundationAddress", chainParams.FoundationAddress)
+	fmt.Println("chainParams.genesisBlock", chainParams.GenesisBlock)
+	fmt.Println("chainParams.genesisBlock", *chainParams.FoundationProgramHash)
+	// GenesisBlock
+	genesisBlock := core.GenesisBlock(*chainParams.FoundationProgramHash)
+	fmt.Println("genesisBlock", genesisBlock)
+	chainParams.Sterilize() // Temporarily disabled due to nil pointer issue
 	spvCfg.ChainParams = chainParams
 
 	spvCfg.PermanentPeers = chainParams.PermanentPeers
@@ -249,6 +260,7 @@ func MinedBroadcastLoop(minedBlockSub *event.TypeMuxSubscription,
 				atomic.StoreInt32(&candSend, 0)
 			}
 			go accessFailedRechargeTx()
+			go eevents.Notify(dpos.ETOnDutyEvent, nil)
 		case obj := <-smallCrossTxSub.Chan():
 			if evt, ok := obj.Data.(events.CmallCrossTx); ok {
 				NotifySmallCrossTx(evt.Tx)
@@ -1163,8 +1175,9 @@ func VerifySmallCrossTx(rawTxID, rawTx string, signatures []string,
 	//	// Indicates that it has been verified or SPV synchronized
 	//	return true, nil
 	//}
-
-	return verifySmallCrossTxBySignature(rawTx, signatures, blockHeight)
+	//
+	//return verifySmallCrossTxBySignature(rawTx, signatures, blockHeight)
+	return false, nil
 }
 
 func verifySmallCrossTxBySignature(rawTx string, signatures []string,
@@ -1239,11 +1252,12 @@ func GetMinGasPrice(spvHeight uint32) (*big.Int, error) {
 }
 
 func Close() {
-	fmt.Println("spv close")
+	fmt.Println("spv close 111111")
 	spvdb := SpvService.GetDatabase()
 	if spvdb != nil {
+		fmt.Println("spv close 2222222")
 		spvdb.Close()
 		close(stopChn)
 	}
-	fmt.Println("spv close end")
+	fmt.Println("spv close 33333333")
 }

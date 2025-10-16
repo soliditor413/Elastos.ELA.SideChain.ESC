@@ -23,6 +23,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"github.com/elastos/Elastos.ELA.SideChain.ESC/core/events"
 	"os"
 	"path/filepath"
 	"slices"
@@ -31,7 +32,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/elastos/Elastos.ELA.SideChain.ESC/core/events"
 	"github.com/elastos/Elastos.ELA.SideChain.ESC/eth"
 	"github.com/elastos/Elastos.ELA.SideChain.ESC/spv"
 	"golang.org/x/crypto/ripemd160"
@@ -345,6 +345,7 @@ func geth(ctx *cli.Context) error {
 
 	startNode(ctx, stack, eth, false)
 	stack.Wait()
+	fmt.Println("geth exit")
 	return nil
 }
 
@@ -353,7 +354,7 @@ func geth(ctx *cli.Context) error {
 func startNode(ctx *cli.Context, stack *node.Node, eth *eth.Ethereum, isConsole bool) {
 	// Start up the node itself
 	utils.StartNode(ctx, stack, isConsole)
-
+	startSpv(ctx, stack, eth)
 	if ctx.IsSet(utils.UnlockedAccountFlag.Name) {
 		log.Warn(`The "unlock" flag has been deprecated and has no effect`)
 	}
@@ -422,11 +423,9 @@ func startNode(ctx *cli.Context, stack *node.Node, eth *eth.Ethereum, isConsole 
 			}
 		}()
 	}
-
-	startSpv(ctx, ethClient, stack, eth)
 }
 
-func startSpv(ctx *cli.Context, client *ethclient.Client, stack *node.Node, eth *eth.Ethereum) {
+func startSpv(ctx *cli.Context, stack *node.Node, eth *eth.Ethereum) {
 	var SpvDataDir string
 	switch {
 	case ctx.IsSet(utils.DataDirFlag.Name):
@@ -482,7 +481,7 @@ func startSpv(ctx *cli.Context, client *ethclient.Client, stack *node.Node, eth 
 		if gaddr, err := calculateGenesisAddress(ghash.String()); err != nil {
 			utils.Fatalf("Cannot calculate: %v", err)
 		} else {
-			log.Info(fmt.Sprintf("SPV Start Monitoring... : %v", gaddr))
+			log.Info(fmt.Sprintf("SPV Start Monitoring GenesisAddress ... : %v", gaddr))
 			spvCfg.GenesisAddress = gaddr
 		}
 	}
@@ -496,7 +495,8 @@ func startSpv(ctx *cli.Context, client *ethclient.Client, stack *node.Node, eth 
 
 		return addr
 	}
-	spv.SpvDbInit(SpvDataDir, pledgedBillContract, spv.GetDefaultSingerAddr(), client)
+	_ = dynamicArbiterHeight
+	spv.SpvDbInit(SpvDataDir, pledgedBillContract, spv.GetDefaultSingerAddr(), stack.Attach())
 	if spvService, err := spv.NewService(spvCfg, stack.EventMux(), dynamicArbiterHeight); err != nil {
 		utils.Fatalf("SPV service init error: %v", err)
 	} else {

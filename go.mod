@@ -93,7 +93,7 @@ require (
 	github.com/aws/smithy-go v1.15.0 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/bits-and-blooms/bitset v1.20.0 // indirect
-	github.com/btcsuite/btcd v0.22.3 // indirect
+	github.com/btcsuite/btcd v0.23.2 // indirect
 	github.com/btcsuite/btcd/chaincfg/chainhash v1.0.1 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/cevaris/ordered_map v0.0.0-20220813181356-34664b69742b // indirect
@@ -158,8 +158,8 @@ require (
 )
 
 require (
-	github.com/elastos/Elastos.ELA v0.9.8-0.20230822071649-363670e32ee4
-	github.com/elastos/Elastos.ELA.SPV v0.1.1-0.20240904064254-31ee1cd78518
+	github.com/elastos/Elastos.ELA v0.9.8-0.20251020113811-1da3cf87cb97
+	github.com/elastos/Elastos.ELA.SPV v0.1.1-0.20251020114056-b1bc149f3081
 	golang.org/x/net v0.38.0
 )
 

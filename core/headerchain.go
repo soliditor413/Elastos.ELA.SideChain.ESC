@@ -277,6 +277,7 @@ func (hc *HeaderChain) writeHeadersAndSetHead(headers []*types.Header) (*headerW
 // and conforms to consensus rules.
 func (hc *HeaderChain) ValidateHeaderChain(chain []*types.Header) (int, error) {
 	// Do a sanity check that the provided chain is actually ordered and linked
+	seals := make([]bool, len(chain))
 	for i := 1; i < len(chain); i++ {
 		if chain[i].Number.Uint64() != chain[i-1].Number.Uint64()+1 {
 			hash, parentHash := chain[i].Hash(), chain[i-1].Hash()
@@ -288,9 +289,10 @@ func (hc *HeaderChain) ValidateHeaderChain(chain []*types.Header) (int, error) {
 			return 0, fmt.Errorf("non contiguous insert: item %d is #%d [%x..], item %d is #%d [%x..] (parent [%x..])", i-1, chain[i-1].Number,
 				parentHash.Bytes()[:4], i, chain[i].Number, hash.Bytes()[:4], chain[i].ParentHash[:4])
 		}
+		seals[i] = true
 	}
 	// Start the parallel verifier
-	abort, results := hc.engine.VerifyHeaders(hc, chain)
+	abort, results := hc.engine.VerifyHeaders(hc, chain, seals)
 	defer close(abort)
 
 	// Iterate over the headers and ensure they all check out

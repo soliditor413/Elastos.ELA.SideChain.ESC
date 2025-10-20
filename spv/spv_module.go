@@ -17,8 +17,10 @@ import (
 	ethereum "github.com/elastos/Elastos.ELA.SideChain.ESC"
 	"github.com/elastos/Elastos.ELA.SideChain.ESC/blocksigner"
 	ethCommon "github.com/elastos/Elastos.ELA.SideChain.ESC/common"
+
 	//"github.com/elastos/Elastos.ELA.SideChain.ESC/consensus"
 	"github.com/elastos/Elastos.ELA.SideChain.ESC/core/events"
+	"github.com/elastos/Elastos.ELA.SideChain.ESC/core/types"
 	"github.com/elastos/Elastos.ELA.SideChain.ESC/dpos"
 	"github.com/elastos/Elastos.ELA.SideChain.ESC/ethclient"
 	"github.com/elastos/Elastos.ELA.SideChain.ESC/ethdb/leveldb"
@@ -723,14 +725,32 @@ func SendTransaction(from ethCommon.Address, elaTx string, fee *big.Int) (err er
 		err = errors.New("canSend is 0")
 		return err, false
 	}
-	//price := new(big.Int).Quo(fee, new(big.Int).SetUint64(gasLimit))
-	//callmsg := ethereum.TXMsg{From: from, To: &ethCommon.Address{}, Gas: gasLimit, Data: data, GasPrice: price}
-	//hash, err := ipcClient.SendPublicTransaction(context.Background(), callmsg)
-	//if err != nil {
-	//	log.Info("Cross chain Transaction failed", "elaTx", elaTx, "ethTh", hash.String(), "gasLimit", gasLimit, "price", price.String())
-	//	return err, true
-	//}
-	//log.Info("Cross chain Transaction", "elaTx", elaTx, "ethTh", hash.String(), "gasLimit", gasLimit, "price.String()", price.String())
+	price := new(big.Int).Quo(fee, new(big.Int).SetUint64(gasLimit))
+	if price.Cmp(big.NewInt(0)) <= 0 {
+		price = big.NewInt(1000000000) // 1 gwei
+	}
+
+	nonce, err := ipcClient.PendingNonceAt(context.Background(), from)
+	if err != nil {
+		log.Error("PendingNonceAt error", "error", err, "elaTx", elaTx)
+		return err, false
+	}
+
+	tx := types.NewTx(&types.LegacyTx{
+		Nonce:    nonce,
+		To:       &ethCommon.Address{},
+		Value:    big.NewInt(0),
+		Data:     data,
+		Gas:      gasLimit,
+		GasPrice: price,
+	})
+
+	err = ipcClient.SendTransaction(context.Background(), tx)
+	if err != nil {
+		log.Info("Cross chain Transaction failed", "elaTx", elaTx, "ethTh", tx.Hash().String(), "gasLimit", gasLimit, "price", price.String())
+		return err, true
+	}
+	log.Info("Cross chain Transaction", "elaTx", elaTx, "ethTh", tx.Hash().String(), "gasLimit", gasLimit, "price", price.String())
 	return nil, true
 }
 

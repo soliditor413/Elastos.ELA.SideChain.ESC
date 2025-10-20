@@ -31,6 +31,7 @@ import (
 	"github.com/elastos/Elastos.ELA.SideChain.ESC/common"
 	"github.com/elastos/Elastos.ELA.SideChain.ESC/common/hexutil"
 	"github.com/elastos/Elastos.ELA.SideChain.ESC/rlp"
+	ecom "github.com/elastos/Elastos.ELA/common"
 	"github.com/ethereum/go-verkle"
 )
 
@@ -448,6 +449,19 @@ func (b *Block) Size() uint64 {
 // stuffed with junk data to add processing overhead
 func (b *Block) SanityCheck() error {
 	return b.header.SanityCheck()
+}
+
+func (b *Block) GetHash() ecom.Uint256 {
+	hash := b.Hash()
+	value, err := ecom.Uint256FromBytes(hash.Bytes())
+	if err != nil {
+		return ecom.EmptyHash
+	}
+	return *value
+}
+
+func (b *Block) GetHeight() uint64 {
+	return b.NumberU64()
 }
 
 type writeCounter uint64

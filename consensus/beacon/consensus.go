@@ -81,7 +81,7 @@ func (beacon *Beacon) Author(header *types.Header) (common.Address, error) {
 
 // VerifyHeader checks whether a header conforms to the consensus rules of the
 // stock Ethereum consensus engine.
-func (beacon *Beacon) VerifyHeader(chain consensus.ChainHeaderReader, header *types.Header) error {
+func (beacon *Beacon) VerifyHeader(chain consensus.ChainHeaderReader, header *types.Header, seal bool) error {
 	// During the live merge transition, the consensus engine used the terminal
 	// total difficulty to detect when PoW (PoA) switched to PoS. Maintaining the
 	// total difficulty values however require applying all the blocks from the
@@ -109,7 +109,7 @@ func (beacon *Beacon) VerifyHeader(chain consensus.ChainHeaderReader, header *ty
 	}
 	// Check >0 TDs with pre-merge, --0 TDs with post-merge rules
 	if header.Difficulty.Sign() > 0 {
-		return beacon.ethone.VerifyHeader(chain, header)
+		return beacon.ethone.VerifyHeader(chain, header, seal)
 	}
 	return beacon.verifyHeader(chain, header, parent)
 }
@@ -137,10 +137,10 @@ func (beacon *Beacon) splitHeaders(headers []*types.Header) ([]*types.Header, []
 // concurrently. The method returns a quit channel to abort the operations and
 // a results channel to retrieve the async verifications.
 // VerifyHeaders expect the headers to be ordered and continuous.
-func (beacon *Beacon) VerifyHeaders(chain consensus.ChainHeaderReader, headers []*types.Header) (chan<- struct{}, <-chan error) {
+func (beacon *Beacon) VerifyHeaders(chain consensus.ChainHeaderReader, headers []*types.Header, seals []bool) (chan<- struct{}, <-chan error) {
 	preHeaders, postHeaders := beacon.splitHeaders(headers)
 	if len(postHeaders) == 0 {
-		return beacon.ethone.VerifyHeaders(chain, headers)
+		return beacon.ethone.VerifyHeaders(chain, headers, seals)
 	}
 	if len(preHeaders) == 0 {
 		return beacon.verifyHeaders(chain, headers, nil)
@@ -156,7 +156,7 @@ func (beacon *Beacon) VerifyHeaders(chain consensus.ChainHeaderReader, headers [
 			old, new, out      = 0, len(preHeaders), 0
 			errors             = make([]error, len(headers))
 			done               = make([]bool, len(headers))
-			oldDone, oldResult = beacon.ethone.VerifyHeaders(chain, preHeaders)
+			oldDone, oldResult = beacon.ethone.VerifyHeaders(chain, preHeaders, seals)
 			newDone, newResult = beacon.verifyHeaders(chain, postHeaders, preHeaders[len(preHeaders)-1])
 		)
 		// Collect the results

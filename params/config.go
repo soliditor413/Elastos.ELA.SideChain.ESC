@@ -69,6 +69,35 @@ var (
 			Cancun: DefaultCancunBlobConfig,
 			Prague: DefaultPragueBlobConfig,
 		},
+		Clique: &CliqueConfig{
+			Period: 15,
+			Epoch:  30000,
+		},
+		PBFTBlock:        big.NewInt(2426880),
+		PreConnectOffset: 20,
+		Pbft: &PbftConfig{
+			Producers: []string{
+				"02089d7e878171240ce0e3633d3ddc8b1128bc221f6b5f0d1551caa717c7493062",
+				"0268214956b8421c0621d62cf2f0b20a02c2dc8c2cc89528aff9bd43b45ed34b9f",
+				"03cce325c55057d2c8e3fb03fb5871794e73b85821e8d0f96a7e4510b4a922fad5",
+				"02661637ae97c3af0580e1954ee80a7323973b256ca862cfcf01b4a18432670db4",
+				"027d816821705e425415eb64a9704f25b4cd7eaca79616b0881fc92ac44ff8a46b",
+				"02d4a8f5016ae22b1acdf8a2d72f6eb712932213804efd2ce30ca8d0b9b4295ac5",
+				"029a4d8e4c99a1199f67a25d79724e14f8e6992a0c8b8acf102682bd8f500ce0c1",
+				"02871b650700137defc5d34a11e56a4187f43e74bb078e147dd4048b8f3c81209f",
+				"02fc66cba365f9957bcb2030e89a57fb3019c57ea057978756c1d46d40dfdd4df0",
+				"03e3fe6124a4ea269224f5f43552250d627b4133cfd49d1f9e0283d0cd2fd209bc",
+				"02b95b000f087a97e988c24331bf6769b4a75e4b7d5d2a38105092a3aa841be33b",
+				"02a0aa9eac0e168f3474c2a0d04e50130833905740a5270e8a44d6c6e85cf6d98c",
+			},
+			PrintLevel:     0,
+			MaxLogsSize:    0,
+			MaxPerLogSize:  0,
+			Magic:          202000,
+			IPAddress:      "",
+			DPoSPort:       0,
+			MaxNodePerHost: 100,
+		},
 	}
 	// HoleskyChainConfig contains the chain parameters to run a node on the Holesky test network.
 	HoleskyChainConfig = &ChainConfig{
@@ -169,42 +198,6 @@ var (
 		BPO1Time:                newUint64(1762365720),
 		BPO2Time:                newUint64(1762955544),
 		DepositContractAddress:  common.HexToAddress("0x00000000219ab540356cBB839Cbe05303d7705Fa"),
-		Ethash:                  new(EthashConfig),
-		BlobScheduleConfig: &BlobScheduleConfig{
-			Cancun: DefaultCancunBlobConfig,
-			Prague: DefaultPragueBlobConfig,
-			Osaka:  DefaultOsakaBlobConfig,
-			BPO1:   DefaultBPO1BlobConfig,
-			BPO2:   DefaultBPO2BlobConfig,
-		},
-	}
-	// ElastosELAChainConfig contains the chain parameters to run a node on the Elastos ELA Side Chain network.
-	ElastosELAChainConfig = &ChainConfig{
-		ChainID:                 big.NewInt(20), // Elastos ELA Side Chain Chain ID
-		HomesteadBlock:          big.NewInt(0),
-		DAOForkBlock:            nil,
-		DAOForkSupport:          true,
-		EIP150Block:             big.NewInt(0),
-		EIP155Block:             big.NewInt(0),
-		EIP158Block:             big.NewInt(0),
-		ByzantiumBlock:          big.NewInt(0),
-		ConstantinopleBlock:     big.NewInt(0),
-		PetersburgBlock:         big.NewInt(0),
-		IstanbulBlock:           big.NewInt(0),
-		MuirGlacierBlock:        nil,
-		BerlinBlock:             big.NewInt(0),
-		LondonBlock:             big.NewInt(0),
-		ArrowGlacierBlock:       nil,
-		GrayGlacierBlock:        nil,
-		TerminalTotalDifficulty: big.NewInt(0),
-		MergeNetsplitBlock:      nil,
-		ShanghaiTime:            newUint64(0),
-		CancunTime:              newUint64(0),
-		PragueTime:              newUint64(0),
-		OsakaTime:               newUint64(0),
-		BPO1Time:                newUint64(0),
-		BPO2Time:                newUint64(0),
-		DepositContractAddress:  common.HexToAddress("0x0000000000000000000000000000000000000000"),
 		Ethash:                  new(EthashConfig),
 		BlobScheduleConfig: &BlobScheduleConfig{
 			Cancun: DefaultCancunBlobConfig,
@@ -450,10 +443,11 @@ var (
 // NetworkNames are user friendly names to use in the chain spec banner.
 var NetworkNames = map[string]string{
 	MainnetChainConfig.ChainID.String():    "mainnet",
-	SepoliaChainConfig.ChainID.String():    "sepolia",
+	SepoliaChainConfig.ChainID.String():    "testnet",
 	HoleskyChainConfig.ChainID.String():    "holesky",
 	HoodiChainConfig.ChainID.String():      "hoodi",
-	ElastosELAChainConfig.ChainID.String(): "elastos-ela-sidechain",
+	MainnetChainConfig.OldChainID.String(): "mainnet",
+	SepoliaChainConfig.OldChainID.String(): "testnet",
 }
 
 // ChainConfig is the core config which determines the blockchain settings.
@@ -522,11 +516,14 @@ type ChainConfig struct {
 	Ethash             *EthashConfig       `json:"ethash,omitempty"`
 	Clique             *CliqueConfig       `json:"clique,omitempty"`
 	BlobScheduleConfig *BlobScheduleConfig `json:"blobSchedule,omitempty"`
+	Pbft               *PbftConfig         `json:"pbft,omitempty"`
 
 	ChainIDBlock          *big.Int `json:"chainIdBlock,omitempty"`
+	DeveloperFeeTime      *uint64  `json:"developerFeeTime,omitempty"`
 	BlackContractAddr     string   `json:"blackcontractaddr,omitempty"`
 	PassBalance           uint64   `json:"passbalance,omitempty"`
 	EvilSignersJournalDir string   `json:"evilSignersJournalDir,omitempty"`
+	PBFTBlock             *big.Int `json:"pbftBlock,omitempty"`
 	PreConnectOffset      uint64   `json:"preConnectOffset,omitempty"`
 	PbftKeyStore          string   `json:"pbftKeyStore,omitempty"`
 	PbftKeyStorePassWord  string
@@ -556,6 +553,23 @@ func (c CliqueConfig) String() string {
 	return fmt.Sprintf("clique(period: %d, epoch: %d)", c.Period, c.Epoch)
 }
 
+type PbftConfig struct {
+	Producers         []string `json:"producers"` // list of producers participating the pbft consensus.
+	Magic             uint32   `json:"magic"`     // Magic defines the magic number used in the DPoS network.
+	IPAddress         string   `json:"ip"`        // IPAddress defines the IP address for the DPoS network.
+	DPoSPort          uint16   `json:"dposport"`  // DPoSPort defines the default port for the DPoS network.
+	PrintLevel        uint8    `json:"printlevel"`
+	MaxLogsSize       int64    `json:"maxlogssize"`
+	MaxPerLogSize     int64    `json:"maxperlogsize"`
+	MaxNodePerHost    uint32   `json:"maxnodeperhost"` //MaxNodePerHost defines max nodes that one host can establish.
+	DPoSV2StartHeight uint32   `json:"dposv2startheight"`
+	NodeVersion       string
+}
+
+func (p *PbftConfig) String() string {
+	return "pbft"
+}
+
 // Description returns a human-readable description of ChainConfig.
 func (c *ChainConfig) Description() string {
 	var banner string
@@ -571,6 +585,8 @@ func (c *ChainConfig) Description() string {
 		banner += "Consensus: Beacon (proof-of-stake), merged from Ethash (proof-of-work)\n"
 	case c.Clique != nil:
 		banner += "Consensus: Beacon (proof-of-stake), merged from Clique (proof-of-authority)\n"
+	case c.Pbft != nil:
+		banner += "Consensus: PBFT(dpos)\n"
 	default:
 		banner += "Consensus: unknown\n"
 	}
@@ -1345,4 +1361,24 @@ func (c *ChainConfig) Rules(num *big.Int, isMerge bool, timestamp uint64) Rules 
 		IsVerkle:         isVerkle,
 		IsEIP4762:        isVerkle,
 	}
+}
+
+func (c *ChainConfig) IsdeveloperSplitfeeTime(time uint64) bool {
+	return isTimestampForked(c.DeveloperFeeTime, time)
+}
+
+// IsChainIDFork returns whether num represents a block number after the ChainID fork
+func (c *ChainConfig) IsChainIDFork(num *big.Int) bool {
+	return isBlockForked(c.ChainIDBlock, num)
+}
+
+func (c *ChainConfig) IsPBFTFork(num *big.Int) bool {
+	return isBlockForked(c.PBFTBlock, num)
+}
+
+func (c *ChainConfig) GetPbftBlock() uint64 {
+	if c.PBFTBlock == nil {
+		return 0
+	}
+	return c.PBFTBlock.Uint64()
 }

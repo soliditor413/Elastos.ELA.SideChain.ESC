@@ -495,7 +495,7 @@ func NewBlockChain(db ethdb.Database, genesis *Genesis, engine consensus.Engine,
 	// The first thing the node will do is reconstruct the verification data for
 	// the head block (ethash cache or clique voting snapshot). Might as well do
 	// it in advance.
-	bc.engine.VerifyHeader(bc, bc.CurrentHeader())
+	bc.engine.VerifyHeader(bc, bc.CurrentHeader(), true)
 
 	if bc.logger != nil && bc.logger.OnBlockchainInit != nil {
 		bc.logger.OnBlockchainInit(chainConfig)
@@ -1778,10 +1778,12 @@ func (bc *BlockChain) insertChain(chain types.Blocks, setHead bool, makeWitness 
 	}()
 	// Start the parallel header verifier
 	headers := make([]*types.Header, len(chain))
+	seals := make([]bool, len(chain))
 	for i, block := range chain {
 		headers[i] = block.Header()
+		seals[i] = true
 	}
-	abort, results := bc.engine.VerifyHeaders(bc, headers)
+	abort, results := bc.engine.VerifyHeaders(bc, headers, seals)
 	defer close(abort)
 
 	// Peek the error for the first block to decide the directing import logic
@@ -2657,6 +2659,11 @@ func (bc *BlockChain) reportBlock(block *types.Block, res *ProcessResult, err er
 	}
 	rawdb.WriteBadBlock(bc.db, block)
 	log.Error(summarizeBadBlock(block, receipts, bc.Config(), err))
+}
+
+// BadBlocks returns a list of the last 'bad blocks' that the client has seen on the network
+func (bc *BlockChain) BadBlocks() []*types.Block {
+	return rawdb.ReadAllBadBlocks(bc.db)
 }
 
 // logForkReadiness will write a log when a future fork is scheduled, but not

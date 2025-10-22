@@ -118,13 +118,14 @@ type Pbft struct {
 	statusMap          map[uint32]map[string]*dmsg.ConsensusStatus
 	notHandledProposal map[string]struct{}
 
-	enableViewLoop bool
-	recoverStarted bool
-	isRecoved      bool
-	period         uint64
-	isSealOver     bool
-	isRecovering   bool
-	isSealing      int32
+	enableViewLoop              bool
+	recoverStarted              bool
+	isRecoved                   bool
+	period                      uint64
+	isSealOver                  bool
+	isRecovering                bool
+	isSealing                   int32
+	needChangeNextTurnProducers bool
 }
 
 func New(chainConfig *params.ChainConfig, dataDir string) *Pbft {
@@ -499,6 +500,10 @@ func (p *Pbft) Finalize(chain consensus.ChainReader, header *types.Header, state
 	header.Root = state.IntermediateRoot(chain.Config().IsEIP158(header.Number))
 	header.UncleHash = types.CalcUncleHash(nil)
 	p.CleanFinalConfirmedBlock(header.Number.Uint64())
+	dutyIndex := p.dispatcher.GetConsensusView().GetDutyIndex()
+	if dutyIndex == 0 && spv.SpvIsWorkingHeight() {
+		p.needChangeNextTurnProducers = true
+	}
 }
 
 func (p *Pbft) FinalizeAndAssemble(chain consensus.ChainReader, header *types.Header, state *state.StateDB, txs []*types.Transaction,

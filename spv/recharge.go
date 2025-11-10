@@ -98,3 +98,26 @@ func GetRechargeDataByTxhash(elaHash string) (RechargeDatas, *big.Int, error) {
 	}
 	return rechargeDatas, totalFee, nil
 }
+
+func TrySetRechargeDataFromSpvService(elaHash string) error {
+	if elaHash[0:2] == "0x" {
+		elaHash = elaHash[2:]
+	}
+	fee, addr, output := FindOutputFeeAndaddressByTxHash(elaHash)
+	var blackAddr ethCommon.Address
+	if fee.Cmp(new(big.Int)) <= 0 && output.Cmp(new(big.Int)) <= 0 && addr == blackAddr {
+		txID, err := common.Uint256FromHexString(elaHash)
+		if err != nil {
+			return err
+		}
+		tx, err := SpvService.GetTransaction(txID)
+		if err != nil {
+			return err
+		}
+		if tx == nil || !tx.IsRechargeToSideChainTx() {
+			return errors.New("not recharge tx: " + elaHash)
+		}
+		SavePayloadInfo(tx, nil)
+	}
+	return nil
+}

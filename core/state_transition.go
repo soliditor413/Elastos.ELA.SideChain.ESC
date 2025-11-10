@@ -318,7 +318,10 @@ func (st *StateTransition) TransitionDb() (result *ExecutionResult, err error) {
 				txhash = hexutil.Encode(msg.Data())
 			}
 			if len(msg.Data()) == 32 || isSmallRechargeTx {
-				recharges, totalFee, err = spv.GetRechargeDataByTxhash(txhash)
+				err = nil
+				if spv.TrySetRechargeDataFromSpvService(txhash) == nil {
+					recharges, totalFee, err = spv.GetRechargeDataByTxhash(txhash)
+				}
 				if err != nil || len(recharges) <= 0 {
 					log.Error("recharge data error", "error", err)
 					return &ExecutionResult{0, nil, nil}, ErrElaToEthAddress

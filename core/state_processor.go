@@ -124,6 +124,10 @@ func ApplyTransaction(config *params.ChainConfig, bc ChainContext, author *commo
 				statedb.SetNonce(blackAddr, statedb.GetNonce(blackAddr)+1)
 			} else if len(tx.Data()) == 32 {
 				txHash = hexutil.Encode(tx.Data())
+				e := spv.TrySetRechargeDataFromSpvService(txHash)
+				if e != nil {
+					return nil, e
+				}
 				fee, addr, output := spv.FindOutputFeeAndaddressByTxHash(txHash)
 				if fee.Cmp(new(big.Int)) > 0 && output.Cmp(new(big.Int)) > 0 && addr != blackAddr {
 					statedb.SetState(blackAddr, common.HexToHash(txHash), tx.Hash())

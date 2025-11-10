@@ -319,7 +319,7 @@ func (st *StateTransition) TransitionDb() (result *ExecutionResult, err error) {
 			}
 			if len(msg.Data()) == 32 || isSmallRechargeTx {
 				err = nil
-				if spv.TrySetRechargeDataFromSpvService(txhash) == nil {
+				if err = spv.TrySetRechargeDataFromSpvService(txhash); err == nil {
 					recharges, totalFee, err = spv.GetRechargeDataByTxhash(txhash)
 				}
 				if err != nil || len(recharges) <= 0 {

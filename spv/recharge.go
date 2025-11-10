@@ -9,6 +9,7 @@ import (
 	ethCommon "github.com/elastos/Elastos.ELA.SideChain.ESC/common"
 
 	"github.com/elastos/Elastos.ELA/common"
+	typeCommon "github.com/elastos/Elastos.ELA/core/types/common"
 )
 
 type RechargeData struct {
@@ -114,7 +115,7 @@ func TrySetRechargeDataFromSpvService(elaHash string) error {
 		if err != nil {
 			return err
 		}
-		if tx == nil || !tx.IsRechargeToSideChainTx() {
+		if tx == nil || tx.TxType() != typeCommon.TransferCrossChainAsset {
 			return errors.New("not recharge tx: " + elaHash)
 		}
 		SavePayloadInfo(tx, nil)

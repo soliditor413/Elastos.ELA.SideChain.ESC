@@ -40,6 +40,7 @@ import (
 	"github.com/elastos/Elastos.ELA.SideChain.ESC/common"
 	"github.com/elastos/Elastos.ELA.SideChain.ESC/common/fdlimit"
 	"github.com/elastos/Elastos.ELA.SideChain.ESC/common/hexutil"
+	"github.com/elastos/Elastos.ELA.SideChain.ESC/consensus/pbft"
 	"github.com/elastos/Elastos.ELA.SideChain.ESC/core"
 	"github.com/elastos/Elastos.ELA.SideChain.ESC/core/rawdb"
 	"github.com/elastos/Elastos.ELA.SideChain.ESC/core/txpool/blobpool"
@@ -1038,11 +1039,7 @@ Please note that --` + MetricsHTTPFlag.Name + ` must be set to start the server.
 		Usage: "connect dpos direct net port",
 		Value: "20639",
 	}
-	PbftMinerAddress = cli.StringFlag{
-		Name:  "pbft.miner.address",
-		Usage: "miner's account to receive transaction's fee",
-		Value: "",
-	}
+
 	DynamicArbiter = cli.Uint64Flag{
 		Name:  "spv.arbiter.height",
 		Usage: "configue the offset blocks to pre-connect to switch to pbft consensus",
@@ -1839,20 +1836,57 @@ func SetEthConfig(ctx *cli.Context, stack *node.Node, cfg *ethconfig.Config) {
 	if ctx.Bool(StateSizeTrackingFlag.Name) {
 		cfg.EnableStateSizeTracking = true
 	}
+
+	cfg.BlackContractAddr = ctx.String(BlackContractAddr.Name)
+	cfg.PassBalance = ctx.Uint64(PassBalance.Name)
+	cfg.EvilSignersJournalDir = filepath.Join(node.DefaultDataDir(), "geth")
+	if ctx.IsSet(DataDirFlag.Name) {
+		cfg.EvilSignersJournalDir = filepath.Join(ctx.String(DataDirFlag.Name), "geth")
+	}
+	cfg.PreConnectOffset = ctx.Uint64(PreConnectOffset.Name)
+	cfg.PbftKeyStore = ctx.String(PbftKeyStore.Name)
+	cfg.PbftKeyStorePassWord = MakeDposPasswordList(ctx)
+	cfg.PbftIPAddress = ctx.String(PbftIPAddress.Name)
+	cfg.PbftDPosPort = uint16(ctx.Uint64(PbftDposPort.Name))
+
+	cfg.DynamicArbiterHeight = ctx.Uint64(DynamicArbiter.Name)
+	cfg.PledgedBillContract = ctx.String(PledgedBillContract.Name)
+	listAccount, err := MakeDeveloperFeeContractAddress(ctx)
+	if err != nil {
+		log.Error("MakeDeveloperFeeContractAddress failed", "error", err)
+	} else {
+		cfg.DeveloperFeeContract = listAccount
+	}
+
+	cfg.FrozenAccountList = make([]string, 0)
 	// Override any default configs for hard coded networks.
 	switch {
 	case ctx.Bool(MainnetFlag.Name):
-		cfg.NetworkId = 1
+		cfg.NetworkId = 20
 		cfg.Genesis = core.DefaultGenesisBlock()
 		SetDNSDiscoveryDefaults(cfg, params.MainnetGenesisHash)
+		ctx.Set(FrozenAccount.Name, "0x93c3A8051b8ba814eB5FB22d655681720E6a4d74")
+		ctx.Set(FrozenAccount.Name, "0x4a9a0cC103199F67730bdC61337d192788858874")
+		cfg.ArbiterListContract = "mainnet"
 	case ctx.Bool(HoleskyFlag.Name):
 		cfg.NetworkId = 17000
 		cfg.Genesis = core.DefaultHoleskyGenesisBlock()
 		SetDNSDiscoveryDefaults(cfg, params.HoleskyGenesisHash)
 	case ctx.Bool(SepoliaFlag.Name):
-		cfg.NetworkId = 11155111
+		cfg.NetworkId = 21
 		cfg.Genesis = core.DefaultSepoliaGenesisBlock()
 		SetDNSDiscoveryDefaults(cfg, params.SepoliaGenesisHash)
+		cfg.BlackContractAddr = "0x491bC043672B9286fA02FA7e0d6A3E5A0384A31A"
+		if !ctx.IsSet(DataDirFlag.Name) {
+			cfg.EvilSignersJournalDir = filepath.Join(node.DefaultDataDir(), "testnet", "geth")
+		}
+		if !ctx.IsSet(DynamicArbiter.Name) {
+			cfg.DynamicArbiterHeight = 1
+		}
+		if !ctx.IsSet(FrozenAccount.Name) {
+			ctx.Set(FrozenAccount.Name, "0x6527946c8b26cc203f9674a5e1d8178beeed70c1")
+		}
+		cfg.ArbiterListContract = "0xcEAA743AA3D1E771600e34c7F18c9e30AB63EEb2"
 	case ctx.Bool(HoodiFlag.Name):
 		cfg.NetworkId = 560048
 		cfg.Genesis = core.DefaultHoodiGenesisBlock()
@@ -2298,6 +2332,9 @@ func MakeChain(ctx *cli.Context, stack *node.Node, readonly bool) (*core.BlockCh
 		Fatalf("%v", err)
 	}
 	engine, err := ethconfig.CreateConsensusEngine(config, chainDb)
+	if config.Pbft != nil {
+		engine = pbft.New(config, stack.ResolvePath(""))
+	}
 	if err != nil {
 		Fatalf("%v", err)
 	}
@@ -2367,7 +2404,7 @@ func MakeChain(ctx *cli.Context, stack *node.Node, readonly bool) (*core.BlockCh
 	}
 	options.VmConfig = vmcfg
 
-	chain, err := core.NewBlockChain(chainDb, gspec, engine, options)
+	chain, err := core.NewBlockChain(chainDb, gspec, engine, engine, options)
 	if err != nil {
 		Fatalf("Can't create BlockChain: %v", err)
 	}
@@ -2417,4 +2454,32 @@ func MakeTrieDatabase(ctx *cli.Context, stack *node.Node, disk ethdb.Database, p
 	pathConfig.JournalDirectory = stack.ResolvePath("triedb")
 	config.PathDB = &pathConfig
 	return triedb.NewDatabase(disk, config)
+}
+
+// MakeDposPasswordList reads password lines from the file specified by the global --password flag.
+func MakeDposPasswordList(ctx *cli.Context) string {
+	path := ctx.String(PbftKeystorePassWord.Name)
+	if path == "" {
+		return ""
+	}
+	text, err := os.ReadFile(path)
+	if err != nil {
+		Fatalf("Failed to read password file: %v", err)
+	}
+	password := strings.TrimRight(string(text), "\r")
+	password = strings.TrimRight(string(password), "\n")
+	return password
+}
+
+func MakeDeveloperFeeContractAddress(ctx *cli.Context) ([]string, error) {
+	list := ctx.StringSlice(DeveloperFeeContract.Name)
+	if len(list) == 0 {
+		return []string{}, nil
+	}
+	for _, account := range list {
+		if !common.IsHexAddress(account) {
+			return []string{}, errors.New("error address format")
+		}
+	}
+	return list, nil
 }

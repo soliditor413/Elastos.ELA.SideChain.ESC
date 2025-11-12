@@ -17,6 +17,8 @@
 package miner
 
 import (
+	"github.com/elastos/Elastos.ELA.SideChain.ESC/event"
+	"github.com/elastos/Elastos.ELA.SideChain.ESC/miner/minerconfig"
 	"math/big"
 	"reflect"
 	"testing"
@@ -55,7 +57,7 @@ var (
 	pendingTxs []*types.Transaction
 	newTxs     []*types.Transaction
 
-	testConfig = Config{
+	testConfig = minerconfig.Config{
 		PendingFeeRecipient: testBankAddress,
 		Recommit:            time.Second,
 		GasCeil:             params.GenesisGasLimit,
@@ -112,12 +114,12 @@ func newTestWorkerBackend(t *testing.T, chainConfig *params.ChainConfig, engine 
 	case *clique.Clique:
 		gspec.ExtraData = make([]byte, 32+common.AddressLength+crypto.SignatureLength)
 		copy(gspec.ExtraData[32:32+common.AddressLength], testBankAddress.Bytes())
-		e.Authorize(testBankAddress)
+		e.Authorize(testBankAddress, nil)
 	case *ethash.Ethash:
 	default:
 		t.Fatalf("unexpected consensus engine type: %T", engine)
 	}
-	chain, err := core.NewBlockChain(db, gspec, engine, &core.BlockChainConfig{ArchiveMode: true})
+	chain, err := core.NewBlockChain(db, gspec, engine, engine, &core.BlockChainConfig{ArchiveMode: true})
 	if err != nil {
 		t.Fatalf("core.NewBlockChain failed: %v", err)
 	}
@@ -138,7 +140,8 @@ func (b *testWorkerBackend) TxPool() *txpool.TxPool       { return b.txPool }
 func newTestWorker(t *testing.T, chainConfig *params.ChainConfig, engine consensus.Engine, db ethdb.Database, blocks int) (*Miner, *testWorkerBackend) {
 	backend := newTestWorkerBackend(t, chainConfig, engine, db, blocks)
 	backend.txPool.Add(pendingTxs, true)
-	w := New(backend, testConfig, engine)
+	mux := new(event.TypeMux)
+	w := New(backend, &testConfig, mux, engine)
 	return w, backend
 }
 
@@ -156,7 +159,7 @@ func TestBuildPayload(t *testing.T) {
 		Random:       common.Hash{},
 		FeeRecipient: recipient,
 	}
-	payload, err := w.buildPayload(args, false)
+	payload, err := w.BuildPayload(args, false)
 	if err != nil {
 		t.Fatalf("Failed to build payload %v", err)
 	}

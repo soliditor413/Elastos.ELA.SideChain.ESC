@@ -33,7 +33,7 @@ import (
 	"github.com/elastos/Elastos.ELA.SideChain.ESC/eth/gasprice"
 	"github.com/elastos/Elastos.ELA.SideChain.ESC/ethdb"
 	"github.com/elastos/Elastos.ELA.SideChain.ESC/log"
-	"github.com/elastos/Elastos.ELA.SideChain.ESC/miner"
+	"github.com/elastos/Elastos.ELA.SideChain.ESC/miner/minerconfig"
 	"github.com/elastos/Elastos.ELA.SideChain.ESC/params"
 )
 
@@ -63,7 +63,7 @@ var Defaults = Config{
 	SnapshotCache:      102,
 	FilterLogCacheSize: 32,
 	LogQueryLimit:      1000,
-	Miner:              miner.DefaultConfig,
+	Miner:              minerconfig.DefaultConfig,
 	TxPool:             legacypool.DefaultConfig,
 	BlobPool:           blobpool.DefaultConfig,
 	RPCGasCap:          50000000,
@@ -137,7 +137,7 @@ type Config struct {
 	LogQueryLimit int
 
 	// Mining options
-	Miner miner.Config
+	Miner minerconfig.Config
 
 	// Transaction pool options
 	TxPool   legacypool.Config
@@ -183,6 +183,27 @@ type Config struct {
 
 	// OverrideVerkle (TODO: remove after the fork)
 	OverrideVerkle *uint64 `toml:",omitempty"`
+
+	BlackContractAddr string
+
+	PassBalance uint64
+
+	// evil signer events jouranl local path
+	EvilSignersJournalDir string
+
+	PreConnectOffset     uint64
+	PbftKeyStore         string
+	PbftKeyStorePassWord string
+	PbftIPAddress        string
+	PbftDPosPort         uint16
+	DPoSV2StartHeight    uint32
+
+	DynamicArbiterHeight uint64
+	FrozenAccountList    []string
+
+	ArbiterListContract  string
+	PledgedBillContract  string
+	DeveloperFeeContract []string
 }
 
 // CreateConsensusEngine creates a consensus engine for the given chain config.

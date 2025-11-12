@@ -67,6 +67,8 @@ type HeaderChain struct {
 
 	procInterrupt func() bool
 	engine        consensus.Engine
+	pbftEngine    consensus.Engine
+	poaEngine     consensus.Engine
 }
 
 // NewHeaderChain creates a new HeaderChain structure. ProcInterrupt points
@@ -658,4 +660,24 @@ func (hc *HeaderChain) Engine() consensus.Engine { return hc.engine }
 // a header chain does not have blocks available for retrieval.
 func (hc *HeaderChain) GetBlock(hash common.Hash, number uint64) *types.Block {
 	return nil
+}
+
+func (hc *HeaderChain) SetEngine(engine consensus.Engine) {
+	hc.engine = engine
+}
+
+func (hc *HeaderChain) SetPOAEngine(engine consensus.Engine) {
+	hc.poaEngine = engine
+}
+
+func (hc *HeaderChain) SetDposChain(engine consensus.Engine) {
+	hc.pbftEngine = engine
+}
+
+func (hc *HeaderChain) GetPOAEngine() consensus.Engine {
+	return hc.poaEngine
+}
+
+func (hc *HeaderChain) GetDposChain() consensus.Engine {
+	return hc.pbftEngine
 }

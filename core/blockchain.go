@@ -331,6 +331,8 @@ type BlockChain struct {
 	procInterrupt atomic.Bool // interrupt signaler for block processing
 
 	engine     consensus.Engine
+	pbftEngine consensus.Engine
+	poaEngine  consensus.Engine
 	validator  Validator // Block and state validator interface
 	prefetcher Prefetcher
 	processor  Processor // Block transaction processor interface
@@ -343,7 +345,7 @@ type BlockChain struct {
 // NewBlockChain returns a fully initialised block chain using information
 // available in the database. It initialises the default Ethereum Validator
 // and Processor.
-func NewBlockChain(db ethdb.Database, genesis *Genesis, engine consensus.Engine, cfg *BlockChainConfig) (*BlockChain, error) {
+func NewBlockChain(db ethdb.Database, genesis *Genesis, engine consensus.Engine, pbftEngine consensus.Engine, cfg *BlockChainConfig) (*BlockChain, error) {
 	if cfg == nil {
 		cfg = DefaultConfig()
 	}
@@ -419,6 +421,11 @@ func NewBlockChain(db ethdb.Database, genesis *Genesis, engine consensus.Engine,
 	// Load blockchain states from disk
 	if err := bc.loadLastState(); err != nil {
 		return nil, err
+	}
+	bc.setPoAEngine(engine)
+	bc.SetDposEngine(pbftEngine)
+	if chainConfig.IsPBFTFork(bc.CurrentHeader().Number) {
+		bc.SetEngine(pbftEngine)
 	}
 	// Make sure the state associated with the block is available, or log out
 	// if there is no available state, waiting for state sync.
@@ -541,6 +548,33 @@ func NewBlockChain(db ethdb.Database, genesis *Genesis, engine consensus.Engine,
 		}
 	}
 	return bc, nil
+}
+
+func (bc *BlockChain) SetDposEngine(engine consensus.Engine) {
+	bc.pbftEngine = engine
+	bc.hc.pbftEngine = engine
+}
+
+func (bc *BlockChain) setPoAEngine(engine consensus.Engine) {
+	bc.poaEngine = engine
+	bc.hc.poaEngine = engine
+}
+
+func (bc *BlockChain) GetDposEngine() consensus.Engine {
+	return bc.pbftEngine
+}
+
+func (bc *BlockChain) GetPoAEngine() consensus.Engine {
+	return bc.poaEngine
+}
+
+func (bc *BlockChain) SetEngine(engine consensus.Engine) {
+	if engine == nil {
+		log.Warn("---------[BlockChain SetEngine] is nil")
+		return
+	}
+	bc.engine = engine
+	bc.hc.SetEngine(engine)
 }
 
 func (bc *BlockChain) setupSnapshot() {
@@ -1672,6 +1706,17 @@ func (bc *BlockChain) writeBlockWithState(block *types.Block, receipts []*types.
 	return nil
 }
 
+// WriteBlockAndSetHead writes the given block and all associated state to the database,
+// and applies the block as the new chain head.
+func (bc *BlockChain) WriteBlockAndSetHead(block *types.Block, receipts []*types.Receipt, logs []*types.Log, state *state.StateDB, emitHeadEvent bool) (status WriteStatus, err error) {
+	if !bc.chainmu.TryLock() {
+		return NonStatTy, errChainStopped
+	}
+	defer bc.chainmu.Unlock()
+
+	return bc.writeBlockAndSetHead(block, receipts, logs, state, emitHeadEvent)
+}
+
 // writeBlockAndSetHead is the internal implementation of WriteBlockAndSetHead.
 // This function expects the chain mutex to be held.
 func (bc *BlockChain) writeBlockAndSetHead(block *types.Block, receipts []*types.Receipt, logs []*types.Log, state *state.StateDB, emitHeadEvent bool) (status WriteStatus, err error) {
@@ -1736,8 +1781,30 @@ func (bc *BlockChain) InsertChain(chain types.Blocks) (int, error) {
 	}
 	defer bc.chainmu.Unlock()
 
-	_, n, err := bc.insertChain(chain, true, false) // No witness collection for mass inserts (would get super large)
+	_, n, err := bc.insertBlockChain(chain, true, false) // No witness collection for mass inserts (would get super large)
 	return n, err
+}
+
+func (bc *BlockChain) insertBlockChain(chain types.Blocks, setHead bool, makeWitness bool) (*stateless.Witness, int, error) {
+	if bc.chainConfig.IsPBFTFork(chain[0].Number()) || bc.chainConfig.PBFTBlock == nil {
+		log.Info("insert chain use pbftEngine engine1")
+		bc.SetEngine(bc.pbftEngine)
+		return bc.insertChain(chain, setHead, makeWitness)
+	}
+	limit := bc.chainConfig.PBFTBlock.Uint64() - chain[0].NumberU64()
+	if limit >= uint64(len(chain)) {
+		log.Info("insert chain use clique engine1")
+		bc.SetEngine(bc.poaEngine)
+		return bc.insertBlockChain(chain, setHead, makeWitness)
+	}
+	cliqueChain := chain[:limit]
+	witness, n, err := bc.insertBlockChain(cliqueChain, setHead, makeWitness)
+	if err != nil {
+		return witness, n, err
+	}
+	pbftChain := chain[limit:]
+	witness, n, err = bc.insertBlockChain(pbftChain, setHead, makeWitness)
+	return witness, n, err
 }
 
 // insertChain is the internal implementation of InsertChain, which assumes that

@@ -3,6 +3,7 @@
 package ethconfig
 
 import (
+	"github.com/elastos/Elastos.ELA.SideChain.ESC/miner/minerconfig"
 	"time"
 
 	"github.com/elastos/Elastos.ELA.SideChain.ESC/common"
@@ -11,7 +12,6 @@ import (
 	"github.com/elastos/Elastos.ELA.SideChain.ESC/core/txpool/blobpool"
 	"github.com/elastos/Elastos.ELA.SideChain.ESC/core/txpool/legacypool"
 	"github.com/elastos/Elastos.ELA.SideChain.ESC/eth/gasprice"
-	"github.com/elastos/Elastos.ELA.SideChain.ESC/miner"
 )
 
 // MarshalTOML marshals as TOML.
@@ -45,7 +45,7 @@ func (c Config) MarshalTOML() (interface{}, error) {
 		Preimages               bool
 		FilterLogCacheSize      int
 		LogQueryLimit           int
-		Miner                   miner.Config
+		Miner                   minerconfig.Config
 		TxPool                  legacypool.Config
 		BlobPool                blobpool.Config
 		GPO                     gasprice.Config
@@ -143,7 +143,7 @@ func (c *Config) UnmarshalTOML(unmarshal func(interface{}) error) error {
 		Preimages               *bool
 		FilterLogCacheSize      *int
 		LogQueryLimit           *int
-		Miner                   *miner.Config
+		Miner                   *minerconfig.Config
 		TxPool                  *legacypool.Config
 		BlobPool                *blobpool.Config
 		GPO                     *gasprice.Config

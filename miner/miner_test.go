@@ -32,6 +32,7 @@ import (
 	"github.com/elastos/Elastos.ELA.SideChain.ESC/core/types"
 	"github.com/elastos/Elastos.ELA.SideChain.ESC/crypto"
 	"github.com/elastos/Elastos.ELA.SideChain.ESC/event"
+	"github.com/elastos/Elastos.ELA.SideChain.ESC/miner/minerconfig"
 	"github.com/elastos/Elastos.ELA.SideChain.ESC/params"
 	"github.com/elastos/Elastos.ELA.SideChain.ESC/trie"
 	"github.com/elastos/Elastos.ELA.SideChain.ESC/triedb"
@@ -137,7 +138,7 @@ func minerTestGenesisBlock(period uint64, gasLimit uint64, faucet common.Address
 
 func createMiner(t *testing.T) *Miner {
 	// Create Ethash config
-	config := Config{
+	config := minerconfig.Config{
 		PendingFeeRecipient: common.HexToAddress("123456789"),
 	}
 	// Create chainConfig
@@ -151,7 +152,7 @@ func createMiner(t *testing.T) *Miner {
 	// Create consensus engine
 	engine := clique.New(chainConfig.Clique, chainDB)
 	// Create Ethereum backend
-	bc, err := core.NewBlockChain(chainDB, genesis, engine, nil)
+	bc, err := core.NewBlockChain(chainDB, genesis, engine, nil, &core.BlockChainConfig{ArchiveMode: true})
 	if err != nil {
 		t.Fatalf("can't create new chain %v", err)
 	}
@@ -160,9 +161,9 @@ func createMiner(t *testing.T) *Miner {
 
 	pool := legacypool.New(testTxPoolConfig, blockchain)
 	txpool, _ := txpool.New(testTxPoolConfig.PriceLimit, blockchain, []txpool.SubPool{pool})
-
 	// Create Miner
 	backend := NewMockBackend(bc, txpool)
-	miner := New(backend, config, engine)
+	mux := new(event.TypeMux)
+	miner := New(backend, &config, mux, engine)
 	return miner
 }

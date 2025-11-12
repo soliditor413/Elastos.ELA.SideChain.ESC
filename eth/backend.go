@@ -20,6 +20,7 @@ package eth
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"math/big"
@@ -31,6 +32,8 @@ import (
 	"github.com/elastos/Elastos.ELA.SideChain.ESC/common"
 	"github.com/elastos/Elastos.ELA.SideChain.ESC/common/hexutil"
 	"github.com/elastos/Elastos.ELA.SideChain.ESC/consensus"
+	"github.com/elastos/Elastos.ELA.SideChain.ESC/consensus/clique"
+	"github.com/elastos/Elastos.ELA.SideChain.ESC/consensus/pbft"
 	"github.com/elastos/Elastos.ELA.SideChain.ESC/core"
 	"github.com/elastos/Elastos.ELA.SideChain.ESC/core/filtermaps"
 	"github.com/elastos/Elastos.ELA.SideChain.ESC/core/rawdb"
@@ -113,8 +116,9 @@ type Ethereum struct {
 
 	APIBackend *EthAPIBackend
 
-	miner    *miner.Miner
-	gasPrice *big.Int
+	miner     *miner.Miner
+	gasPrice  *big.Int
+	etherbase common.Address
 
 	networkID     uint64
 	netRPCService *ethapi.NetAPI
@@ -179,6 +183,10 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 	if err != nil {
 		return nil, err
 	}
+	chainConfig.PassBalance = config.PassBalance
+	chainConfig.BlackContractAddr = config.BlackContractAddr
+	chainConfig.EvilSignersJournalDir = config.EvilSignersJournalDir
+
 	engine, err := ethconfig.CreateConsensusEngine(chainConfig, chainDb)
 	if err != nil {
 		return nil, err
@@ -272,12 +280,12 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 		overrides.OverrideVerkle = config.OverrideVerkle
 	}
 	options.Overrides = &overrides
-
-	eth.blockchain, err = core.NewBlockChain(chainDb, config.Genesis, eth.engine, options)
+	pbftEngine := pbft.New(chainConfig, stack.DataDir())
+	eth.blockchain, err = core.NewBlockChain(chainDb, config.Genesis, eth.engine, pbftEngine, options)
 	if err != nil {
 		return nil, err
 	}
-
+	eth.SetEngine(eth.blockchain.Engine())
 	// Initialize filtermaps log index.
 	fmConfig := filtermaps.Config{
 		History:        config.LogHistory,
@@ -342,7 +350,7 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 
 	eth.dropper = newDropper(eth.p2pServer.MaxDialedConns(), eth.p2pServer.MaxInboundConns())
 
-	eth.miner = miner.New(eth, config.Miner, eth.engine)
+	eth.miner = miner.New(eth, &config.Miner, eth.eventMux, eth.engine)
 	eth.miner.SetExtra(makeExtraData(config.Miner.ExtraData))
 	eth.miner.SetPrioAddresses(config.TxPool.Locals)
 
@@ -364,6 +372,28 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 	eth.shutdownTracker.MarkStartup()
 
 	return eth, nil
+}
+
+func (s *Ethereum) SetEngine(engine consensus.Engine) {
+	if s.engine == engine {
+		return
+	}
+	isMining := false
+	log.Info("-----------------[SWITCH ENGINE TO DPOS!]-----------------")
+	pbftEngine := engine.(*pbft.Pbft)
+	if s.miner != nil {
+		isMining = s.miner.Mining()
+		s.StopMining()
+	}
+	s.engine.Close()
+	s.engine = engine
+	s.blockchain.SetEngine(engine)
+	if s.miner != nil {
+		s.miner.SetEngine(engine)
+		if pbftEngine != nil && isMining {
+			s.miner.Start()
+		}
+	}
 }
 
 func makeExtraData(extra []byte) []byte {
@@ -413,6 +443,73 @@ func (s *Ethereum) ResetWithGenesisBlock(gb *types.Block) {
 	s.blockchain.ResetWithGenesisBlock(gb)
 }
 
+func (s *Ethereum) Etherbase() (eb common.Address, err error) {
+	s.lock.RLock()
+	etherbase := s.etherbase
+	s.lock.RUnlock()
+
+	if etherbase != (common.Address{}) {
+		return etherbase, nil
+	}
+	return common.Address{}, errors.New("etherbase must be explicitly specified")
+}
+
+// SetEtherbase sets the mining reward address.
+func (s *Ethereum) SetEtherbase(etherbase common.Address) {
+	s.lock.Lock()
+	s.etherbase = etherbase
+	s.lock.Unlock()
+
+	s.miner.SetEtherbase(etherbase)
+}
+
+// StartMining starts the miner with the given number of CPU threads. If mining
+// is already running, this method adjust the number of threads allowed to use
+// and updates the minimum price required by the transaction pool.
+func (s *Ethereum) StartMining() error {
+	// If the miner was not running, initialize it
+	if !s.IsMining() {
+		// Propagate the initial price point to the transaction pool
+		s.lock.RLock()
+		price := s.gasPrice
+		s.lock.RUnlock()
+		s.txPool.SetGasTip(price)
+
+		// Configure the local mining address
+		eb, err := s.Etherbase()
+		if err != nil {
+			log.Error("Cannot start mining without etherbase", "err", err)
+			return fmt.Errorf("etherbase missing: %v", err)
+		}
+		if clique, ok := s.engine.(*clique.Clique); ok {
+			wallet, err := s.accountManager.Find(accounts.Account{Address: eb})
+			if wallet == nil || err != nil {
+				log.Error("Etherbase account unavailable locally", "err", err)
+				return fmt.Errorf("signer missing: %v", err)
+			}
+			clique.Authorize(eb, wallet.SignData)
+		}
+
+		go s.miner.Start()
+	}
+	return nil
+}
+
+// StopMining terminates the miner, both at the consensus engine level as well as
+// at the block creation level.
+func (s *Ethereum) StopMining() {
+	// Update the thread count within the consensus engine
+	type threaded interface {
+		SetThreads(threads int)
+	}
+	if th, ok := s.engine.(threaded); ok {
+		th.SetThreads(-1)
+	}
+	// Stop the block creating itself
+	s.miner.Stop()
+}
+
+func (s *Ethereum) IsMining() bool      { return s.miner.Mining() }
 func (s *Ethereum) Miner() *miner.Miner { return s.miner }
 
 func (s *Ethereum) AccountManager() *accounts.Manager  { return s.accountManager }

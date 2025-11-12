@@ -348,7 +348,12 @@ func (s EIP155Signer) Sender(tx *Transaction) (common.Address, error) {
 		return HomesteadSigner{}.Sender(tx)
 	}
 	if tx.ChainId().Cmp(s.chainId) != 0 {
-		return common.Address{}, fmt.Errorf("%w: have %d want %d", ErrInvalidChainId, tx.ChainId(), s.chainId)
+		if tx.ChainId() == common.Big1 || tx.ChainId() == big.NewInt(20) {
+			s.chainId = tx.ChainId()
+			s.chainIdMul = new(big.Int).Mul(s.chainId, big.NewInt(2))
+		} else {
+			return common.Address{}, fmt.Errorf("%w: have %d want %d", ErrInvalidChainId, tx.ChainId(), s.chainId)
+		}
 	}
 	V, R, S := tx.RawSignatureValues()
 	V = new(big.Int).Sub(V, s.chainIdMul)

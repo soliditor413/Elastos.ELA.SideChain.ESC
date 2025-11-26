@@ -102,6 +102,7 @@ func (ethash *Ethash) Author(header *types.Header) (common.Address, error) {
 // stock Ethereum ethash engine.
 func (ethash *Ethash) VerifyHeader(chain consensus.ChainHeaderReader, header *types.Header, seal bool) error {
 	// Short circuit if the header is known, or its parent not
+	fmt.Println("ethash VerifyHeader")
 	number := header.Number.Uint64()
 	if chain.GetHeader(header.Hash(), number) != nil {
 		return nil

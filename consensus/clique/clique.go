@@ -220,6 +220,7 @@ func (c *Clique) Author(header *types.Header) (common.Address, error) {
 
 // VerifyHeader checks whether a header conforms to the consensus rules.
 func (c *Clique) VerifyHeader(chain consensus.ChainHeaderReader, header *types.Header, seal bool) error {
+	fmt.Println("clique VerifyHeader", " header ", header.Number.Uint64())
 	return c.verifyHeader(chain, header, nil)
 }
 
@@ -419,6 +420,7 @@ func (c *Clique) snapshot(chain consensus.ChainHeaderReader, number uint64, hash
 				for i := 0; i < len(signers); i++ {
 					copy(signers[i][:], checkpoint.Extra[extraVanity+i*common.AddressLength:])
 				}
+				fmt.Println("new snapshot >> ", "signers", signers, "len ", len(signers))
 				snap = newSnapshot(c.config, c.signatures, number, hash, signers)
 				if err := snap.store(c.db); err != nil {
 					return nil, err
@@ -520,7 +522,7 @@ func (c *Clique) Prepare(chain consensus.ChainHeaderReader, header *types.Header
 	// If the block isn't a checkpoint, cast a random vote (good enough for now)
 	header.Coinbase = common.Address{}
 	header.Nonce = types.BlockNonce{}
-
+	fmt.Println("Clique Prepare ", header.Number.Uint64())
 	number := header.Number.Uint64()
 	// Assemble the voting snapshot to check which votes make sense
 	snap, err := c.snapshot(chain, number-1, header.ParentHash, nil)
@@ -553,7 +555,7 @@ func (c *Clique) Prepare(chain consensus.ChainHeaderReader, header *types.Header
 
 	// Set the correct difficulty
 	header.Difficulty = calcDifficulty(snap, signer)
-
+	fmt.Println("Clique Prepare header.Difficulty ", header.Difficulty.Uint64())
 	// Ensure the extra data has all its components
 	if len(header.Extra) < extraVanity {
 		header.Extra = append(header.Extra, bytes.Repeat([]byte{0x00}, extraVanity-len(header.Extra))...)
@@ -565,6 +567,7 @@ func (c *Clique) Prepare(chain consensus.ChainHeaderReader, header *types.Header
 			header.Extra = append(header.Extra, signer[:]...)
 		}
 	}
+	header.Extra = append(header.Extra, make([]byte, extraElaHeight)...)
 	header.Extra = append(header.Extra, make([]byte, extraSeal)...)
 
 	// Mix digest is reserved for now, set to empty
@@ -586,6 +589,7 @@ func (c *Clique) Prepare(chain consensus.ChainHeaderReader, header *types.Header
 // consensus rules in clique, do nothing here.
 func (c *Clique) Finalize(chain consensus.ChainHeaderReader, header *types.Header, state vm.StateDB, body *types.Body) {
 	// No block rewards in PoA, so the state remains as is
+	fmt.Println("Clique Finalize", header.Number.Uint64())
 }
 
 // FinalizeAndAssemble implements consensus.Engine, ensuring no uncles are set,
@@ -594,12 +598,13 @@ func (c *Clique) FinalizeAndAssemble(chain consensus.ChainHeaderReader, header *
 	if len(body.Withdrawals) > 0 {
 		return nil, errors.New("clique does not support withdrawals")
 	}
+	fmt.Println("Clique FinalizeAndAssemble", header.Number.Uint64())
 	// Finalize block
 	c.Finalize(chain, header, state, body)
 
 	// Assign the final state root to header.
 	header.Root = state.IntermediateRoot(chain.Config().IsEIP158(header.Number))
-
+	header.UncleHash = types.CalcUncleHash(nil)
 	// Assemble and return the final block for sealing.
 	return types.NewBlock(header, &types.Body{Transactions: body.Transactions}, receipts, trie.NewStackTrie(nil)), nil
 }

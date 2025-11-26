@@ -22,6 +22,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/elastos/Elastos.ELA.SideChain.ESC/spv"
 	"math"
 	"math/big"
 	"runtime"
@@ -179,6 +180,7 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 
 	// Here we determine genesis hash and active ChainConfig.
 	// We need these to figure out the consensus parameters and to set up history pruning.
+	fmt.Println("LoadChainConfig >>>>>>>  ")
 	chainConfig, _, err := core.LoadChainConfig(chainDb, config.Genesis)
 	if err != nil {
 		return nil, err
@@ -205,6 +207,7 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 		accountManager:  stack.AccountManager(),
 		engine:          engine,
 		networkID:       networkID,
+		etherbase:       config.Miner.Etherbase,
 		gasPrice:        config.Miner.GasPrice,
 		p2pServer:       stack.Server(),
 		discmix:         enode.NewFairMix(discmixTimeout),
@@ -391,7 +394,7 @@ func (s *Ethereum) SetEngine(engine consensus.Engine) {
 	if s.miner != nil {
 		s.miner.SetEngine(engine)
 		if pbftEngine != nil && isMining {
-			s.miner.Start()
+			s.miner.Start(s.etherbase)
 		}
 	}
 }
@@ -451,6 +454,14 @@ func (s *Ethereum) Etherbase() (eb common.Address, err error) {
 	if etherbase != (common.Address{}) {
 		return etherbase, nil
 	}
+	if wallets := s.AccountManager().Wallets(); len(wallets) > 0 {
+		if accs := wallets[0].Accounts(); len(accs) > 0 {
+			etherbase = accs[0].Address
+			s.SetEtherbase(etherbase)
+			log.Info("Etherbase automatically configured", "address", etherbase.String())
+			return etherbase, nil
+		}
+	}
 	return common.Address{}, errors.New("etherbase must be explicitly specified")
 }
 
@@ -489,8 +500,8 @@ func (s *Ethereum) StartMining() error {
 			}
 			clique.Authorize(eb, wallet.SignData)
 		}
-
-		go s.miner.Start()
+		fmt.Println("StartMining>>>>>>>>", " eb", eb.String())
+		go s.miner.Start(eb)
 	}
 	return nil
 }
@@ -667,6 +678,7 @@ func (s *Ethereum) setupDiscovery() error {
 // Ethereum protocol.
 func (s *Ethereum) Stop() error {
 	// Stop all the peer-related stuff first.
+	spv.Close()
 	s.discmix.Close()
 	s.dropper.Stop()
 	s.handler.Stop()

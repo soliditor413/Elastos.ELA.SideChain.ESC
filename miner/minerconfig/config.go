@@ -11,7 +11,7 @@ import (
 
 // Config is the configuration parameters of mining.
 type Config struct {
-	Etherbase           common.Address `toml:"-"`          // Deprecated
+	Etherbase           common.Address `toml:"-"`          // Public address for block mining rewards
 	PendingFeeRecipient common.Address `toml:"-"`          // Address for pending block rewards.
 	ExtraData           hexutil.Bytes  `toml:",omitempty"` // Block extra data set by the miner
 	GasCeil             uint64         // Target gas ceiling for mined blocks.

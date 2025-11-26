@@ -303,7 +303,7 @@ func initGenesis(ctx *cli.Context) error {
 		utils.Fatalf("Failed to write chain config: %v", compatErr)
 	}
 	log.Info("Successfully wrote genesis state", "database", "chaindata", "hash", hash)
-
+	fmt.Println("genesis. extradata ", genesis.ExtraData, "length ", len(genesis.ExtraData))
 	return nil
 }
 

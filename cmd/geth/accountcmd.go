@@ -365,3 +365,59 @@ func accountImport(ctx *cli.Context) error {
 	fmt.Printf("Address: {%x}\n", acct.Address)
 	return nil
 }
+
+// tries unlocking the specified account a few times.
+func unlockAccount(ks *keystore.KeyStore, address string, i int, passwords []string) (accounts.Account, string) {
+	account, err := utils.MakeAddress(ks, address)
+	if err != nil {
+		utils.Fatalf("Could not list accounts: %v", err)
+	}
+	for trials := 0; trials < 3; trials++ {
+		prompt := fmt.Sprintf("Unlocking account %s | Attempt %d/%d", address, trials+1, 3)
+		password := utils.GetPassPhraseWithList(prompt, false, i, passwords)
+		err = ks.Unlock(account, password)
+		if err == nil {
+			fmt.Println("Unlocked account", "address", account.Address.Hex())
+			return account, password
+		}
+		if err, ok := err.(*keystore.AmbiguousAddrError); ok {
+			fmt.Println("Unlocked account", "address", account.Address.Hex())
+			return ambiguousAddrRecovery(ks, err, password), password
+		}
+		if err != keystore.ErrDecrypt {
+			// No need to prompt again if the error is not decryption-related.
+			break
+		}
+	}
+	// All trials expended to unlock account, bail out
+	utils.Fatalf("Failed to unlock account %s (%v)", address, err)
+
+	return accounts.Account{}, ""
+}
+
+func ambiguousAddrRecovery(ks *keystore.KeyStore, err *keystore.AmbiguousAddrError, auth string) accounts.Account {
+	fmt.Printf("Multiple key files exist for address %x:\n", err.Addr)
+	for _, a := range err.Matches {
+		fmt.Println("  ", a.URL)
+	}
+	fmt.Println("Testing your password against all of them...")
+	var match *accounts.Account
+	for i, a := range err.Matches {
+		if e := ks.Unlock(a, auth); e == nil {
+			match = &err.Matches[i]
+			break
+		}
+	}
+	if match == nil {
+		utils.Fatalf("None of the listed files could be unlocked.")
+		return accounts.Account{}
+	}
+	fmt.Printf("Your password unlocked %s\n", match.URL)
+	fmt.Println("In order to avoid this warning, you need to remove the following duplicate key files:")
+	for _, a := range err.Matches {
+		if a != *match {
+			fmt.Println("  ", a.URL)
+		}
+	}
+	return *match
+}

@@ -20,8 +20,11 @@ import (
 	"cmp"
 	crand "crypto/rand"
 	"errors"
+	"github.com/elastos/Elastos.ELA.SideChain.ESC/consensus/beacon"
+	"github.com/elastos/Elastos.ELA.SideChain.ESC/crypto"
 	"maps"
 	"math"
+	"math/big"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -120,22 +123,25 @@ type handler struct {
 	chain    *core.BlockChain
 	maxPeers int
 
-	downloader     *downloader.Downloader
-	txFetcher      *fetcher.TxFetcher
-	peers          *peerSet
-	txBroadcastKey [16]byte
+	downloader   *downloader.Downloader
+	blockFetcher *fetcher.BlockFetcher
+	txFetcher    *fetcher.TxFetcher
+	peers        *peerSet
 
-	eventMux   *event.TypeMux
-	txsCh      chan core.NewTxsEvent
-	txsSub     event.Subscription
-	blockRange *blockRangeState
+	eventMux      *event.TypeMux
+	txsCh         chan core.NewTxsEvent
+	txsSub        event.Subscription
+	minedBlockSub *event.TypeMuxSubscription
+	blockRange    *blockRangeState
 
 	requiredBlocks map[uint64]common.Hash
 
 	// channels for fetcher, syncer, txsyncLoop
 	quitSync chan struct{}
+	stopCh   chan struct{}
 
-	wg sync.WaitGroup
+	chainSync *chainSyncer
+	wg        sync.WaitGroup
 
 	handlerStartCh chan struct{}
 	handlerDoneCh  chan struct{}
@@ -155,11 +161,11 @@ func newHandler(config *handlerConfig) (*handler, error) {
 		txpool:         config.TxPool,
 		chain:          config.Chain,
 		peers:          newPeerSet(),
-		txBroadcastKey: newBroadcastChoiceKey(),
 		requiredBlocks: config.RequiredBlocks,
 		quitSync:       make(chan struct{}),
 		handlerDoneCh:  make(chan struct{}),
 		handlerStartCh: make(chan struct{}),
+		stopCh:         make(chan struct{}),
 	}
 	if config.Sync == ethconfig.FullSync {
 		// The database seems empty as the current block is the genesis. Yet the snap
@@ -196,6 +202,35 @@ func newHandler(config *handlerConfig) (*handler, error) {
 	// Construct the downloader (long sync)
 	h.downloader = downloader.New(config.Database, h.eventMux, h.chain, h.removePeer, h.enableSyncedFeatures)
 
+	// Construct the fetcher (short sync)
+	validator := func(header *types.Header) error {
+		// Reject all the PoS style headers in the first place. No matter
+		// the chain has finished the transition or not, the PoS headers
+		// should only come from the trusted consensus layer instead of
+		// p2p network.
+		if beacon, ok := h.chain.Engine().(*beacon.Beacon); ok {
+			if beacon.IsPoSHeader(header) {
+				return errors.New("unexpected post-merge header")
+			}
+		}
+		return h.chain.Engine().VerifyHeader(h.chain, header, true)
+	}
+	heighter := func() uint64 {
+		return h.chain.CurrentBlock().Number.Uint64()
+	}
+	inserter := func(blocks types.Blocks) (int, error) {
+		// If snap sync is running, deny importing weird blocks. This is a problematic
+		// clause when starting up a new network, because snap-syncing miners might not
+		// accept each others' blocks until a restart. Unfortunately we haven't figured
+		// out a way yet where nodes can decide unilaterally whether the network is new
+		// or not. This should be fixed if we figure out a solution.
+		if !h.synced.Load() {
+			log.Warn("Syncing, discarded propagated block", "number", blocks[0].Number(), "hash", blocks[0].Hash())
+			return 0, nil
+		}
+		return h.chain.InsertChain(blocks)
+	}
+	h.blockFetcher = fetcher.NewBlockFetcher(false, nil, h.chain.GetBlockByHash, validator, h.BroadcastBlock, heighter, nil, inserter, h.removePeer)
 	fetchTx := func(peer string, hashes []common.Hash) error {
 		p := h.peers.peer(peer)
 		if p == nil {
@@ -207,6 +242,7 @@ func newHandler(config *handlerConfig) (*handler, error) {
 		return h.txpool.Add(txs, false)
 	}
 	h.txFetcher = fetcher.NewTxFetcher(h.txpool.Has, addTxs, fetchTx, h.removePeer)
+	h.chainSync = newChainSyncer(h)
 	return h, nil
 }
 
@@ -436,13 +472,19 @@ func (h *handler) Start(maxPeers int) {
 	h.txsSub = h.txpool.SubscribeTransactions(h.txsCh, false)
 	go h.txBroadcastLoop()
 
+	// broadcast mined blocks
+	h.wg.Add(1)
+	h.minedBlockSub = h.eventMux.Subscribe(core.NewMinedBlockEvent{})
+	go h.minedBroadcastLoop()
+
 	// broadcast block range
 	h.wg.Add(1)
 	h.blockRange = newBlockRangeState(h.chain, h.eventMux)
 	go h.blockRangeLoop(h.blockRange)
 
 	// start sync handlers
-	h.txFetcher.Start()
+	h.wg.Add(1)
+	go h.chainSync.loop()
 
 	// start peer handler tracker
 	h.wg.Add(1)
@@ -455,6 +497,7 @@ func (h *handler) Stop() {
 	h.txFetcher.Stop()
 	h.downloader.Terminate()
 
+	close(h.stopCh)
 	// Quit chainSync and txsync64.
 	// After this is done, no new peers will be accepted.
 	close(h.quitSync)
@@ -483,40 +526,58 @@ func (h *handler) BroadcastTransactions(txs types.Transactions) {
 
 		txset = make(map[*ethPeer][]common.Hash) // Set peer->hash to transfer directly
 		annos = make(map[*ethPeer][]common.Hash) // Set peer->hash to announce
-
-		signer = types.LatestSigner(h.chain.Config())
-		choice = newBroadcastChoice(h.nodeID, h.txBroadcastKey)
-		peers  = h.peers.all()
 	)
+	// Broadcast transactions to a batch of peers not knowing about it
+	direct := big.NewInt(int64(math.Sqrt(float64(h.peers.len())))) // Approximate number of peers to broadcast to
+	if direct.BitLen() == 0 {
+		direct = big.NewInt(1)
+	}
+	total := new(big.Int).Exp(direct, big.NewInt(2), nil) // Stabilise total peer count a bit based on sqrt peers
 
+	var (
+		signer = types.LatestSignerForChainID(h.chain.Config().ChainID) // Don't care about chain status, we just need *a* sender
+		hasher = crypto.NewKeccakState()
+		hash   = make([]byte, 32)
+	)
 	for _, tx := range txs {
-		var directSet map[*ethPeer]struct{}
+		var maybeDirect bool
 		switch {
 		case tx.Type() == types.BlobTxType:
 			blobTxs++
 		case tx.Size() > txMaxBroadcastSize:
 			largeTxs++
 		default:
-			// Get transaction sender address. Here we can ignore any error
-			// since we're just interested in any value.
-			txSender, _ := types.Sender(signer, tx)
-			directSet = choice.choosePeers(peers, txSender)
+			maybeDirect = true
 		}
+		// Send the transaction (if it's small enough) directly to a subset of
+		// the peers that have not received it yet, ensuring that the flow of
+		// transactions is grouped by account to (try and) avoid nonce gaps.
+		//
+		// To do this, we hash the local enode IW with together with a peer's
+		// enode ID together with the transaction sender and broadcast if
+		// `sha(self, peer, sender) mod peers < sqrt(peers)`.
+		for _, peer := range h.peers.peersWithoutTransaction(tx.Hash()) {
+			var broadcast bool
+			if maybeDirect {
+				hasher.Reset()
+				hasher.Write(h.nodeID.Bytes())
+				hasher.Write(peer.Node().ID().Bytes())
 
-		for _, peer := range peers {
-			if peer.KnownTransaction(tx.Hash()) {
-				continue
+				from, _ := types.Sender(signer, tx) // Ignore error, we only use the addr as a propagation target splitter
+				hasher.Write(from.Bytes())
+
+				hasher.Read(hash)
+				if new(big.Int).Mod(new(big.Int).SetBytes(hash), total).Cmp(direct) < 0 {
+					broadcast = true
+				}
 			}
-			if _, ok := directSet[peer]; ok {
-				// Send direct.
+			if broadcast {
 				txset[peer] = append(txset[peer], tx.Hash())
 			} else {
-				// Send announcement.
 				annos[peer] = append(annos[peer], tx.Hash())
 			}
 		}
 	}
-
 	for peer, hashes := range txset {
 		directCount += len(hashes)
 		peer.AsyncSendTransactions(hashes)
@@ -527,6 +588,65 @@ func (h *handler) BroadcastTransactions(txs types.Transactions) {
 	}
 	log.Debug("Distributed transactions", "plaintxs", len(txs)-blobTxs-largeTxs, "blobtxs", blobTxs, "largetxs", largeTxs,
 		"bcastpeers", len(txset), "bcastcount", directCount, "annpeers", len(annos), "anncount", annCount)
+}
+
+// minedBroadcastLoop sends mined blocks to connected peers.
+func (h *handler) minedBroadcastLoop() {
+	defer h.wg.Done()
+
+	for {
+		select {
+		case obj := <-h.minedBlockSub.Chan():
+			if obj == nil {
+				continue
+			}
+			if ev, ok := obj.Data.(core.NewMinedBlockEvent); ok {
+				h.BroadcastBlock(ev.Block, true)  // Propagate block to peers
+				h.BroadcastBlock(ev.Block, false) // Only then announce to the rest
+			}
+		case <-h.stopCh:
+			return
+		}
+	}
+}
+
+// BroadcastBlock will either propagate a block to a subset of its peers, or
+// will only announce its availability (depending what's requested).
+func (h *handler) BroadcastBlock(block *types.Block, propagate bool) {
+	// Disable the block propagation if it's the post-merge block.
+	if beacon, ok := h.chain.Engine().(*beacon.Beacon); ok {
+		if beacon.IsPoSHeader(block.Header()) {
+			return
+		}
+	}
+	hash := block.Hash()
+	peers := h.peers.peersWithoutBlock(hash)
+
+	// If propagation is requested, send to a subset of the peer
+	if propagate {
+		// Calculate the TD of the block (it's not imported yet, so block.Td is not valid)
+		var td *big.Int
+		if parent := h.chain.GetBlock(block.ParentHash(), block.NumberU64()-1); parent != nil {
+			td = new(big.Int).Add(block.Difficulty(), h.chain.GetTd(block.ParentHash(), block.NumberU64()-1))
+		} else {
+			log.Error("Propagating dangling block", "number", block.Number(), "hash", hash)
+			return
+		}
+		// Send the block to a subset of our peers
+		transfer := peers[:int(math.Sqrt(float64(len(peers))))]
+		for _, peer := range transfer {
+			peer.AsyncSendNewBlock(block, td)
+		}
+		log.Trace("Propagated block", "hash", hash, "recipients", len(transfer), "duration", common.PrettyDuration(time.Since(block.ReceivedAt)))
+		return
+	}
+	// Otherwise if the block is indeed in out own chain, announce it
+	if h.chain.HasBlock(hash, block.NumberU64()) {
+		for _, peer := range peers {
+			peer.AsyncSendNewBlockHash(block)
+		}
+		log.Trace("Announced block", "hash", hash, "recipients", len(peers), "duration", common.PrettyDuration(time.Since(block.ReceivedAt)))
+	}
 }
 
 // txBroadcastLoop announces new transactions to connected peers.

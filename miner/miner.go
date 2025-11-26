@@ -141,7 +141,8 @@ func (miner *Miner) update() {
 	}
 }
 
-func (miner *Miner) Start() {
+func (miner *Miner) Start(coinbase common.Address) {
+	miner.SetEtherbase(coinbase)
 	miner.startCh <- struct{}{}
 }
 

@@ -309,6 +309,7 @@ func SetupGenesisBlockWithOverride(db ethdb.Database, triedb *triedb.Database, g
 	}
 	// Commit the genesis if the database is empty
 	ghash := rawdb.ReadCanonicalHash(db, 0)
+	fmt.Println("genesisc hash ", ghash.String())
 	if (ghash == common.Hash{}) {
 		if genesis == nil {
 			log.Info("Writing default main-net genesis block")
@@ -421,6 +422,8 @@ func LoadChainConfig(db ethdb.Database, genesis *Genesis) (cfg *params.ChainConf
 		// external ancient chain segment), ensure the provided genesis
 		// is matched.
 		ghash := genesis.ToBlock().Hash()
+		fmt.Println("loadChainConfig ghash ", ghash.String())
+		fmt.Println(" genesisc ", genesis.ExtraData)
 		if stored != (common.Hash{}) && ghash != stored {
 			return nil, ghash, &GenesisMismatchError{stored, ghash}
 		}
@@ -565,6 +568,7 @@ func (g *Genesis) Commit(db ethdb.Database, triedb *triedb.Database) (*types.Blo
 	}
 	batch := db.NewBatch()
 	rawdb.WriteGenesisStateSpec(batch, block.Hash(), blob)
+	rawdb.WriteTd(batch, block.Hash(), block.NumberU64(), g.Difficulty)
 	rawdb.WriteBlock(batch, block)
 	rawdb.WriteReceipts(batch, block.Hash(), block.NumberU64(), nil)
 	rawdb.WriteCanonicalHash(batch, block.Hash(), block.NumberU64())

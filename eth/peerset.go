@@ -20,11 +20,14 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"math/big"
 	"slices"
 	"sync"
 
+	"github.com/elastos/Elastos.ELA.SideChain.ESC/common"
 	"github.com/elastos/Elastos.ELA.SideChain.ESC/eth/protocols/eth"
 	"github.com/elastos/Elastos.ELA.SideChain.ESC/eth/protocols/snap"
+	"github.com/elastos/Elastos.ELA.SideChain.ESC/log"
 	"github.com/elastos/Elastos.ELA.SideChain.ESC/p2p"
 )
 
@@ -198,6 +201,55 @@ func (ps *peerSet) all() []*ethPeer {
 	defer ps.lock.RUnlock()
 
 	return slices.Collect(maps.Values(ps.peers))
+}
+
+// their set of known hashes, so it might be propagated to them.
+func (ps *peerSet) peersWithoutBlock(hash common.Hash) []*ethPeer {
+	ps.lock.RLock()
+	defer ps.lock.RUnlock()
+	list := make([]*ethPeer, 0, len(ps.peers))
+	for _, p := range ps.peers {
+		if !p.KnownBlock(hash) {
+			list = append(list, p)
+		}
+	}
+	log.Info("get peers without block", "hash", hash, "total", len(ps.peers), "unknown", len(list))
+	return list
+}
+
+// peersWithoutTransaction retrieves a list of peers that do not have a given
+// transaction in their set of known hashes.
+func (ps *peerSet) peersWithoutTransaction(hash common.Hash) []*ethPeer {
+	ps.lock.RLock()
+	defer ps.lock.RUnlock()
+
+	list := make([]*ethPeer, 0, len(ps.peers))
+	for _, p := range ps.peers {
+		if !p.KnownTransaction(hash) {
+			list = append(list, p)
+		}
+	}
+	return list
+}
+
+// peerWithHighestTD retrieves the known peer with the currently highest total
+// difficulty, but below the given PoS switchover threshold.
+func (ps *peerSet) peerWithHighestTD() *eth.Peer {
+	ps.lock.RLock()
+	defer ps.lock.RUnlock()
+	var (
+		bestPeer *eth.Peer
+		bestTd   *big.Int
+	)
+	for _, p := range ps.peers {
+		if p.Lagging() {
+			continue
+		}
+		if _, td := p.Head(); bestPeer == nil || td.Cmp(bestTd) > 0 {
+			bestPeer, bestTd = p.Peer, td
+		}
+	}
+	return bestPeer
 }
 
 // len returns if the current number of `eth` peers in the set. Since the `snap`

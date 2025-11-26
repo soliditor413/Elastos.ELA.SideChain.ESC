@@ -20,6 +20,7 @@ package downloader
 import (
 	"errors"
 	"fmt"
+	"math/big"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -58,17 +59,26 @@ var (
 )
 
 var (
-	errBusy    = errors.New("busy")
-	errBadPeer = errors.New("action from bad peer ignored")
-
+	errBusy                    = errors.New("busy")
+	errUnknownPeer             = errors.New("peer is unknown or unhealthy")
+	errBadPeer                 = errors.New("action from bad peer ignored")
+	errStallingPeer            = errors.New("peer is stalling")
+	errUnsyncedPeer            = errors.New("unsynced peer")
+	errNoPeers                 = errors.New("no peers to keep download active")
 	errTimeout                 = errors.New("timeout")
+	errEmptyHeaderSet          = errors.New("empty header set by peer")
+	errPeersUnavailable        = errors.New("no peers available or all tried for download")
+	errInvalidAncestor         = errors.New("retrieved ancestor is invalid")
 	errInvalidChain            = errors.New("retrieved hash chain is invalid")
 	errInvalidBody             = errors.New("retrieved block body is invalid")
 	errInvalidReceipt          = errors.New("retrieved receipt is invalid")
 	errCancelStateFetch        = errors.New("state data download canceled (requested)")
 	errCancelContentProcessing = errors.New("content processing canceled (requested)")
 	errCanceled                = errors.New("syncing canceled (requested)")
+	errTooOld                  = errors.New("peer's protocol version too old")
+	errNoAncestorFound         = errors.New("no common ancestor found")
 	errNoPivotHeader           = errors.New("pivot header is not found")
+	ErrMergeTransition         = errors.New("legacy sync reached the merge")
 )
 
 // SyncMode defines the sync method of the downloader.
@@ -326,6 +336,35 @@ func (d *Downloader) UnregisterPeer(id string) error {
 	d.queue.Revoke(id)
 
 	return nil
+}
+
+// LegacySync tries to sync up our local block chain with a remote peer, both
+// adding various sanity checks as well as wrapping it with various log entries.
+func (d *Downloader) LegacySync(id string, head common.Hash, td, ttd *big.Int, mode SyncMode) error {
+	err := d.synchronise(mode, nil)
+
+	switch err {
+	case nil, errBusy, errCanceled:
+		return err
+	}
+	if errors.Is(err, errInvalidChain) || errors.Is(err, errBadPeer) || errors.Is(err, errTimeout) ||
+		errors.Is(err, errStallingPeer) || errors.Is(err, errUnsyncedPeer) || errors.Is(err, errEmptyHeaderSet) ||
+		errors.Is(err, errPeersUnavailable) || errors.Is(err, errTooOld) || errors.Is(err, errInvalidAncestor) {
+		log.Warn("Synchronisation failed, dropping peer", "peer", id, "err", err)
+		if d.dropPeer == nil {
+			// The dropPeer method is nil when `--copydb` is used for a local copy.
+			// Timeouts can occur if e.g. compaction hits at the wrong time, and can be ignored
+			log.Warn("Downloader wants to drop peer, but peerdrop-function is not set", "peer", id)
+		} else {
+			d.dropPeer(id)
+		}
+		return err
+	}
+	if errors.Is(err, ErrMergeTransition) {
+		return err // This is an expected fault, don't keep printing it in a spin-loop
+	}
+	log.Warn("Synchronisation failed, retrying", "err", err)
+	return err
 }
 
 // synchronise will select the peer and use it for synchronising. If an empty string is given

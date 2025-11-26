@@ -363,6 +363,7 @@ func NewBlockChain(db ethdb.Database, genesis *Genesis, engine consensus.Engine,
 	// has already been initialized.
 	chainConfig, genesisHash, compatErr, err := SetupGenesisBlockWithOverride(db, triedb, genesis, cfg.Overrides)
 	if err != nil {
+		fmt.Println("SetupGenesisBlockWithOverride err ", err)
 		return nil, err
 	}
 	log.Info("")
@@ -425,6 +426,7 @@ func NewBlockChain(db ethdb.Database, genesis *Genesis, engine consensus.Engine,
 	bc.setPoAEngine(engine)
 	bc.SetDposEngine(pbftEngine)
 	if chainConfig.IsPBFTFork(bc.CurrentHeader().Number) {
+		fmt.Println("SetEngine to pbftEngine")
 		bc.SetEngine(pbftEngine)
 	}
 	// Make sure the state associated with the block is available, or log out
@@ -468,6 +470,7 @@ func NewBlockChain(db ethdb.Database, genesis *Genesis, engine consensus.Engine,
 			}
 		}
 	}
+	fmt.Println("new block chain 1111111111 .>>>>>>")
 	// Ensure that a previous crash in SetHead doesn't leave extra ancients
 	if frozen, err := bc.db.Ancients(); err == nil && frozen > 0 {
 		var (
@@ -499,11 +502,14 @@ func NewBlockChain(db ethdb.Database, genesis *Genesis, engine consensus.Engine,
 			}
 		}
 	}
+	fmt.Println("new block chain 222222 .>>>>>>", " bc.CurrentHeader()", bc.CurrentHeader().Number.Uint64())
 	// The first thing the node will do is reconstruct the verification data for
 	// the head block (ethash cache or clique voting snapshot). Might as well do
 	// it in advance.
-	bc.engine.VerifyHeader(bc, bc.CurrentHeader(), true)
-
+	err = bc.engine.VerifyHeader(bc, bc.CurrentHeader(), true)
+	if err != nil {
+		fmt.Println("verifyHeader errror ", err)
+	}
 	if bc.logger != nil && bc.logger.OnBlockchainInit != nil {
 		bc.logger.OnBlockchainInit(chainConfig)
 	}
@@ -1040,6 +1046,7 @@ func (bc *BlockChain) setHeadBeyondRoot(head uint64, time uint64, root common.Ha
 			// In theory we should update all in-memory markers in the
 			// last step, however the direction of SetHead is from high
 			// to low, so it's safe to update in-memory markers directly.
+			fmt.Println("currentblock store 2222", newHeadBlock.Number.Uint64())
 			bc.currentBlock.Store(newHeadBlock)
 			headBlockGauge.Update(int64(newHeadBlock.Number.Uint64()))
 
@@ -1163,6 +1170,7 @@ func (bc *BlockChain) SnapSyncCommitHead(hash common.Hash) error {
 	if !bc.chainmu.TryLock() {
 		return errChainStopped
 	}
+	fmt.Println("currentblock store 3333", block.NumberU64())
 	bc.currentBlock.Store(block.Header())
 	headBlockGauge.Update(int64(block.NumberU64()))
 	bc.chainmu.Unlock()
@@ -1203,6 +1211,7 @@ func (bc *BlockChain) ResetWithGenesisBlock(genesis *types.Block) error {
 
 	// Last update all in-memory chain markers
 	bc.genesisBlock = genesis
+	fmt.Println("currentblock store 4444", bc.genesisBlock.NumberU64())
 	bc.currentBlock.Store(bc.genesisBlock.Header())
 	headBlockGauge.Update(int64(bc.genesisBlock.NumberU64()))
 	bc.hc.SetGenesis(bc.genesisBlock.Header())

@@ -19,7 +19,6 @@ package rawdb
 import (
 	"bytes"
 	"errors"
-
 	"github.com/elastos/Elastos.ELA.SideChain.ESC/common"
 	"github.com/elastos/Elastos.ELA.SideChain.ESC/ethdb"
 	"github.com/elastos/Elastos.ELA.SideChain.ESC/log"

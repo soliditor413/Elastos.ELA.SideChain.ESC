@@ -380,6 +380,7 @@ func (w *worker) prepareWork(genParams *generateParams, witness bool) (*environm
 		GasLimit:   core.CalcGasLimit(parent.GasLimit, w.config.GasCeil),
 		Time:       timestamp,
 		Coinbase:   genParams.coinbase,
+		Extra:      w.extra,
 	}
 
 	// Only set the coinbase if our consensus engine is running (avoid spurious block rewards)
@@ -392,10 +393,6 @@ func (w *worker) prepareWork(genParams *generateParams, witness bool) (*environm
 		}
 	}
 
-	// Set the extra field.
-	if len(w.config.ExtraData) != 0 {
-		header.Extra = w.config.ExtraData
-	}
 	// Set the randomness field from the beacon chain if it's available.
 	if genParams.random != (common.Hash{}) {
 		header.MixDigest = genParams.random
@@ -939,6 +936,7 @@ func (w *worker) newWorkLoop(recommit time.Duration) {
 	for {
 		select {
 		case <-w.startCh:
+			fmt.Println(" startCh--===>>>>>>>")
 			clearPending(w.chain.CurrentBlock().Number.Uint64())
 			timestamp = time.Now().Unix()
 			commit(commitInterruptNewHead)
@@ -962,6 +960,7 @@ func (w *worker) newWorkLoop(recommit time.Duration) {
 			if w.isRunning() && ((w.chainConfig.Clique != nil &&
 				w.chainConfig.Clique.Period > 0) || (w.chainConfig.Pbft != nil)) {
 				// Short circuit if no new transaction arrives.
+				fmt.Println("timer.c >>>>> commit")
 				commit(commitInterruptResubmit)
 			}
 
@@ -1095,9 +1094,9 @@ func (w *worker) commitWork(interruptCh chan int32, timestamp int64) {
 			return
 		}
 	}
-
+	engine, isPbft := w.engine.(*pbft.Pbft)
 	parentHash := w.chain.CurrentBlock().Hash()
-
+	fmt.Println("commit Work >>>>>>>>>>>> parent ", parentHash.String(), "coinbase=", coinbase.String(), "current ", w.chain.CurrentBlock().Number.Uint64())
 	work, err := w.prepareWork(&generateParams{
 		timestamp:  uint64(timestamp),
 		parentHash: parentHash,
@@ -1122,7 +1121,14 @@ func (w *worker) commitWork(interruptCh chan int32, timestamp int64) {
 		log.Debug("commitWork finish", "reason", err)
 		break
 	}
-
+	if err != nil {
+		log.Error("Failed to fillTransactions ", "err", err)
+		return
+	}
+	if isPbft && !engine.IsProducer() {
+		log.Info("self is not a producer, not commit new work")
+		return
+	}
 	w.commit(work, w.fullTaskHook, start)
 
 	// Swap out the old work with the new one, terminating any leftover

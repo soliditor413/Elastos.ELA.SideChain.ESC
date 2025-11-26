@@ -23,6 +23,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"github.com/elastos/Elastos.ELA.SideChain.ESC/accounts/keystore"
 	"github.com/elastos/Elastos.ELA.SideChain.ESC/core/events"
 	"os"
 	"path/filepath"
@@ -220,6 +221,17 @@ var (
 		utils.MetricsInfluxDBBucketFlag,
 		utils.MetricsInfluxDBOrganizationFlag,
 		utils.StateSizeTrackingFlag,
+		utils.BlackContractAddr,
+		utils.PreConnectOffset,
+		utils.SpvMonitoringAddrFlag,
+		utils.PbftKeyStore,
+		utils.PbftKeystorePassWord,
+		utils.PbftIPAddress,
+		utils.PbftDposPort,
+		utils.DynamicArbiter,
+		utils.FrozenAccount,
+		utils.PledgedBillContract,
+		utils.DeveloperFeeContract,
 	}
 )
 
@@ -355,7 +367,8 @@ func startNode(ctx *cli.Context, stack *node.Node, eth *eth.Ethereum, isConsole 
 	// Start up the node itself
 	utils.StartNode(ctx, stack, isConsole)
 	if ctx.IsSet(utils.UnlockedAccountFlag.Name) {
-		log.Warn(`The "unlock" flag has been deprecated and has no effect`)
+		fmt.Println(">>>> unlockAccounts <<<<<<")
+		unlockAccounts(ctx, stack)
 	}
 
 	// Register wallet event handlers to open and auto-derive wallets
@@ -421,6 +434,23 @@ func startNode(ctx *cli.Context, stack *node.Node, eth *eth.Ethereum, isConsole 
 				}
 			}
 		}()
+	}
+	startMiner(ctx, eth)
+}
+
+func startMiner(ctx *cli.Context, eth *eth.Ethereum) {
+	if ctx.Bool(utils.MiningEnabledFlag.Name) {
+		// Mining only makes sense if a full Ethereum node is running
+		if ctx.String(utils.SyncModeFlag.Name) == "light" {
+			utils.Fatalf("Light clients do not support mining")
+		}
+
+		if eth.Engine() != eth.BlockChain().GetDposEngine() {
+			fmt.Println("start miner", "engine ", eth.Engine())
+			if err := eth.StartMining(); err != nil {
+				utils.Fatalf("Failed to start mining: %v", err)
+			}
+		}
 	}
 }
 
@@ -549,4 +579,35 @@ func calculateGenesisAddress(genesisBlockHash string) (string, error) {
 	log.Info(fmt.Sprintf("genesis address: %v ", genesisAddress))
 
 	return genesisAddress, nil
+}
+
+// unlockAccounts unlocks any account specifically requested.
+func unlockAccounts(ctx *cli.Context, stack *node.Node) {
+	var unlocks []string
+	inputs := strings.Split(ctx.String(utils.UnlockedAccountFlag.Name), ",")
+	for _, input := range inputs {
+		if trimmed := strings.TrimSpace(input); trimmed != "" {
+			unlocks = append(unlocks, trimmed)
+		}
+	}
+	// Short circuit if there is no account to unlock.
+	if len(unlocks) == 0 {
+		log.Warn("No unlocked accounts")
+		return
+	}
+	// If insecure account unlocking is not allowed if node's APIs are exposed to external.
+	// Print warning log to user and skip unlocking.
+	if !stack.Config().InsecureUnlockAllowed && stack.Config().ExtRPCEnabled() {
+		utils.Fatalf("Account unlock with HTTP access is forbidden!")
+	}
+	backends := stack.AccountManager().Backends(keystore.KeyStoreType)
+	if len(backends) == 0 {
+		log.Warn("Failed to unlock accounts, keystore is not available")
+		return
+	}
+	ks := backends[0].(*keystore.KeyStore)
+	passwords := utils.MakePasswordList(ctx)
+	for i, account := range unlocks {
+		unlockAccount(ks, account, i, passwords)
+	}
 }

@@ -254,8 +254,10 @@ func MinedBroadcastLoop(minedBlockSub *event.TypeMuxSubscription,
 			go accessFailedRechargeTx()
 			go eevents.Notify(dpos.ETOnDutyEvent, nil)
 		case obj := <-smallCrossTxSub.Chan():
-			if evt, ok := obj.Data.(events.CmallCrossTx); ok {
-				NotifySmallCrossTx(evt.Tx)
+			if obj != nil {
+				if evt, ok := obj.Data.(events.CmallCrossTx); ok {
+					NotifySmallCrossTx(evt.Tx)
+				}
 			}
 		case _ = <-stopChn:
 			return

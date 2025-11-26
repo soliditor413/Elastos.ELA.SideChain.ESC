@@ -100,6 +100,7 @@ func (beacon *Beacon) VerifyHeader(chain consensus.ChainHeaderReader, header *ty
 	// >0 to ==0 TD only once by forbidding an ==0 to be followed by a >0.
 
 	// Verify that we're not reverting to pre-merge from post-merge
+	fmt.Println("beacon VerifyHeader")
 	parent := chain.GetHeader(header.ParentHash, header.Number.Uint64()-1)
 	if parent == nil {
 		return consensus.ErrUnknownAncestor
@@ -108,10 +109,7 @@ func (beacon *Beacon) VerifyHeader(chain consensus.ChainHeaderReader, header *ty
 		return consensus.ErrInvalidTerminalBlock
 	}
 	// Check >0 TDs with pre-merge, --0 TDs with post-merge rules
-	if header.Difficulty.Sign() > 0 {
-		return beacon.ethone.VerifyHeader(chain, header, seal)
-	}
-	return beacon.verifyHeader(chain, header, parent)
+	return beacon.ethone.VerifyHeader(chain, header, seal)
 }
 
 // splitHeaders splits the provided header batch into two parts according to

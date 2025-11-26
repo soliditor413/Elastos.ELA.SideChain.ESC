@@ -64,7 +64,7 @@ import (
 	"github.com/elastos/Elastos.ELA.SideChain.ESC/metrics"
 	"github.com/elastos/Elastos.ELA.SideChain.ESC/metrics/exp"
 	"github.com/elastos/Elastos.ELA.SideChain.ESC/metrics/influxdb"
-	"github.com/elastos/Elastos.ELA.SideChain.ESC/miner"
+	"github.com/elastos/Elastos.ELA.SideChain.ESC/miner/minerconfig"
 	"github.com/elastos/Elastos.ELA.SideChain.ESC/node"
 	"github.com/elastos/Elastos.ELA.SideChain.ESC/p2p"
 	"github.com/elastos/Elastos.ELA.SideChain.ESC/p2p/enode"
@@ -999,12 +999,12 @@ Please note that --` + MetricsHTTPFlag.Name + ` must be set to start the server.
 		Category: flags.MetricsCategory,
 	}
 
-	SpvMonitoringAddrFlag = cli.StringFlag{
+	SpvMonitoringAddrFlag = &cli.StringFlag{
 		Name:  "spvmoniaddr",
 		Usage: "configue SPV module monitoring ela chain address",
 		Value: "",
 	}
-	BlackContractAddr = cli.StringFlag{
+	BlackContractAddr = &cli.StringFlag{
 		Name:  "black.contract.address",
 		Usage: "configue Black Contract address",
 		Value: "0xC445f9487bF570fF508eA9Ac320b59730e81e503",
@@ -1014,48 +1014,48 @@ Please note that --` + MetricsHTTPFlag.Name + ` must be set to start the server.
 		Usage: "configue Oracle Contract account balance",
 		Value: 1000000000000000000,
 	}
-	PbftKeyStore = cli.StringFlag{
+	PbftKeyStore = &cli.StringFlag{
 		Name:  "pbft.keystore",
 		Usage: "configue pbft consensus account",
 		Value: "keystore.dat",
 	}
-	PreConnectOffset = cli.Int64Flag{
+	PreConnectOffset = &cli.Int64Flag{
 		Name:  "preconnectoffset",
 		Usage: "configue the offset blocks to pre-connect to switch to pbft consensus",
 		Value: 100,
 	}
-	PbftKeystorePassWord = cli.StringFlag{
+	PbftKeystorePassWord = &cli.StringFlag{
 		Name:  "pbft.keystore.password",
 		Usage: "pbft keystore password",
 		Value: "",
 	}
-	PbftIPAddress = cli.StringFlag{
+	PbftIPAddress = &cli.StringFlag{
 		Name:  "pbft.net.address",
 		Usage: "connect dpos direct net ip",
 		Value: "127.0.0.1",
 	}
-	PbftDposPort = cli.StringFlag{
+	PbftDposPort = &cli.StringFlag{
 		Name:  "pbft.net.port",
 		Usage: "connect dpos direct net port",
 		Value: "20639",
 	}
 
-	DynamicArbiter = cli.Uint64Flag{
+	DynamicArbiter = &cli.Uint64Flag{
 		Name:  "spv.arbiter.height",
 		Usage: "configue the offset blocks to pre-connect to switch to pbft consensus",
 		Value: 1034900,
 	}
-	FrozenAccount = cli.StringSliceFlag{
+	FrozenAccount = &cli.StringSliceFlag{
 		Name:  "frozen.account.list",
 		Usage: "config the frozen account list",
 		Value: &cli.StringSlice{},
 	}
-	PledgedBillContract = cli.StringFlag{
+	PledgedBillContract = &cli.StringFlag{
 		Name:  "pledged.bill.address",
 		Usage: "configue pledged bill address",
 		Value: "",
 	}
-	DeveloperFeeContract = cli.StringSliceFlag{
+	DeveloperFeeContract = &cli.StringSliceFlag{
 		Name:  "developer.fee.contract",
 		Usage: "configue developer fee contract address",
 		Value: &cli.StringSlice{},
@@ -1381,7 +1381,16 @@ func MakeDatabaseHandles(max int) int {
 // setEtherbase retrieves the etherbase from the directly specified command line flags.
 func setEtherbase(ctx *cli.Context, cfg *ethconfig.Config) {
 	if ctx.IsSet(MinerEtherbaseFlag.Name) {
-		log.Warn("Option --miner.etherbase is deprecated as the etherbase is set by the consensus client post-merge")
+		addr := ctx.String(MinerEtherbaseFlag.Name)
+		if strings.HasPrefix(addr, "0x") || strings.HasPrefix(addr, "0X") {
+			addr = addr[2:]
+		}
+		b, err := hex.DecodeString(addr)
+		if err != nil || len(b) != common.AddressLength {
+			Fatalf("-%s: invalid etherbase address %q", MinerEtherbaseFlag.Name, addr)
+			return
+		}
+		cfg.Miner.Etherbase = common.BytesToAddress(b)
 	}
 	if !ctx.IsSet(MinerPendingFeeRecipientFlag.Name) {
 		return
@@ -1396,6 +1405,52 @@ func setEtherbase(ctx *cli.Context, cfg *ethconfig.Config) {
 		return
 	}
 	cfg.Miner.PendingFeeRecipient = common.BytesToAddress(b)
+}
+
+// MakeAddress converts an account specified directly as a hex encoded string or
+// a key index in the key store to an internal account representation.
+func MakeAddress(ks *keystore.KeyStore, account string) (accounts.Account, error) {
+	// If the specified account is a valid address, return it
+	if common.IsHexAddress(account) {
+		return accounts.Account{Address: common.HexToAddress(account)}, nil
+	}
+	// Otherwise try to interpret the account as a keystore index
+	index, err := strconv.Atoi(account)
+	if err != nil || index < 0 {
+		return accounts.Account{}, fmt.Errorf("invalid account address or index %q", account)
+	}
+	log.Warn("-------------------------------------------------------------------")
+	log.Warn("Referring to accounts by order in the keystore folder is dangerous!")
+	log.Warn("This functionality is deprecated and will be removed in the future!")
+	log.Warn("Please use explicit addresses! (can search via `geth account list`)")
+	log.Warn("-------------------------------------------------------------------")
+
+	accs := ks.Accounts()
+	if len(accs) <= index {
+		return accounts.Account{}, fmt.Errorf("index %d higher than number of accounts %d", index, len(accs))
+	}
+	return accs[index], nil
+}
+
+// MakePasswordList reads password lines from the file specified by the global --password flag.
+func MakePasswordList(ctx *cli.Context) []string {
+	return MakePasswordListFromPath(ctx.Path(PasswordFileFlag.Name))
+}
+
+func MakePasswordListFromPath(path string) []string {
+	if path == "" {
+		return nil
+	}
+	text, err := os.ReadFile(path)
+	if err != nil {
+		Fatalf("Failed to read password file: %v", err)
+	}
+	lines := strings.Split(string(text), "\n")
+	// Sanitise DOS line endings.
+	for i := range lines {
+		lines[i] = strings.TrimRight(lines[i], "\r")
+	}
+	return lines
 }
 
 func SetP2PConfig(ctx *cli.Context, cfg *p2p.Config) {
@@ -1479,7 +1534,7 @@ func SetNodeConfig(ctx *cli.Context, cfg *node.Config) {
 		cfg.USB = ctx.Bool(USBFlag.Name)
 	}
 	if ctx.IsSet(InsecureUnlockAllowedFlag.Name) {
-		log.Warn(fmt.Sprintf("Option --%s is deprecated and has no effect", InsecureUnlockAllowedFlag.Name))
+		cfg.InsecureUnlockAllowed = ctx.Bool(InsecureUnlockAllowedFlag.Name)
 	}
 	if ctx.IsSet(DBEngineFlag.Name) {
 		dbEngine := ctx.String(DBEngineFlag.Name)
@@ -1603,7 +1658,7 @@ func setBlobPool(ctx *cli.Context, cfg *blobpool.Config) {
 	}
 }
 
-func setMiner(ctx *cli.Context, cfg *miner.Config) {
+func setMiner(ctx *cli.Context, cfg *minerconfig.Config) {
 	if ctx.Bool(MiningEnabledFlag.Name) {
 		log.Warn("The flag --mine is deprecated and will be removed")
 	}

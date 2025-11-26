@@ -448,7 +448,7 @@ func (i *indexIniter) run(lastID uint64) {
 		case <-done:
 			if checkDone() {
 				close(i.done)
-				i.log.Info("Histories have been fully indexed", "last", lastID)
+				i.log.Info("Histories have been fully indexed done", "last", lastID)
 				return
 			}
 			// Relaunch the background runner if some tasks are left

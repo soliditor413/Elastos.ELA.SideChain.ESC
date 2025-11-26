@@ -17,7 +17,10 @@
 package eth
 
 import (
+	"github.com/elastos/Elastos.ELA.SideChain.ESC/p2p/enode"
+	"math/big"
 	"math/rand"
+	"sync"
 	"sync/atomic"
 
 	mapset "github.com/deckarep/golang-set/v2"
@@ -39,6 +42,20 @@ const (
 	// maxQueuedTxAnns is the maximum number of transaction announcements to queue up
 	// before dropping older announcements.
 	maxQueuedTxAnns = 4096
+
+	// maxKnownBlocks is the maximum block hashes to keep in the known list
+	// before starting to randomly evict them.
+	maxKnownBlocks = 1024
+
+	// maxQueuedBlocks is the maximum number of block propagations to queue up before
+	// dropping broadcasts. There's not much point in queueing stale blocks, so a few
+	// that might cover uncles should be enough.
+	maxQueuedBlocks = 4
+
+	// maxQueuedBlockAnns is the maximum number of block announcements to queue up before
+	// dropping broadcasts. Similarly to block propagations, there's no point to queue
+	// above some healthy uncle limit, so use that.
+	maxQueuedBlockAnns = 4
 )
 
 // Peer is a collection of relevant information we have about a `eth` peer.
@@ -50,6 +67,14 @@ type Peer struct {
 	version   uint              // Protocol version negotiated
 	lastRange atomic.Pointer[BlockRangeUpdatePacket]
 
+	lagging bool        // lagging peer is still connected, but won't be used to sync.
+	head    common.Hash // Latest advertised head block hash
+	td      *big.Int    // Latest advertised head block total difficulty
+
+	knownBlocks     *knownCache            // Set of block hashes known to be known by this peer
+	queuedBlocks    chan *blockPropagation // Queue of blocks to broadcast to the peer
+	queuedBlockAnns chan *types.Block      // Queue of blocks to announce to the peer
+
 	txpool      TxPool             // Transaction pool used by the broadcasters for liveness checks
 	knownTxs    *knownCache        // Set of transaction hashes known to be known by this peer
 	txBroadcast chan []common.Hash // Channel used to queue transaction propagation requests
@@ -59,27 +84,34 @@ type Peer struct {
 	reqCancel   chan *cancel   // Dispatch channel to cancel pending requests and untrack them
 	resDispatch chan *response // Dispatch channel to fulfil pending requests and untrack them
 
-	term chan struct{} // Termination channel to stop the broadcasters
+	term   chan struct{} // Termination channel to stop the broadcasters
+	txTerm chan struct{} // Termination channel to stop the tx broadcasters
+	lock   sync.RWMutex  // Mutex protecting the internal fields
 }
 
 // NewPeer creates a wrapper for a network connection and negotiated  protocol
 // version.
 func NewPeer(version uint, p *p2p.Peer, rw p2p.MsgReadWriter, txpool TxPool) *Peer {
 	peer := &Peer{
-		id:          p.ID().String(),
-		Peer:        p,
-		rw:          rw,
-		version:     version,
-		knownTxs:    newKnownCache(maxKnownTxs),
-		txBroadcast: make(chan []common.Hash),
-		txAnnounce:  make(chan []common.Hash),
-		reqDispatch: make(chan *request),
-		reqCancel:   make(chan *cancel),
-		resDispatch: make(chan *response),
-		txpool:      txpool,
-		term:        make(chan struct{}),
+		id:              p.ID().String(),
+		Peer:            p,
+		rw:              rw,
+		version:         version,
+		knownTxs:        newKnownCache(maxKnownTxs),
+		knownBlocks:     newKnownCache(maxKnownBlocks),
+		queuedBlocks:    make(chan *blockPropagation, maxQueuedBlocks),
+		queuedBlockAnns: make(chan *types.Block, maxQueuedBlockAnns),
+		txBroadcast:     make(chan []common.Hash),
+		txAnnounce:      make(chan []common.Hash),
+		reqDispatch:     make(chan *request),
+		reqCancel:       make(chan *cancel),
+		resDispatch:     make(chan *response),
+		txpool:          txpool,
+		term:            make(chan struct{}),
+		txTerm:          make(chan struct{}),
 	}
 	// Start up all the broadcasters
+	go peer.broadcastBlocks()
 	go peer.broadcastTransactions()
 	go peer.announceTransactions()
 	go peer.dispatcher()
@@ -92,6 +124,16 @@ func NewPeer(version uint, p *p2p.Peer, rw p2p.MsgReadWriter, txpool TxPool) *Pe
 // clean it up!
 func (p *Peer) Close() {
 	close(p.term)
+	p.CloseTxBroadcast()
+}
+
+// CloseTxBroadcast signals the tx broadcast goroutine to terminate.
+func (p *Peer) CloseTxBroadcast() {
+	select {
+	case <-p.txTerm:
+	default:
+		close(p.txTerm)
+	}
 }
 
 // ID retrieves the peer's unique identifier.
@@ -99,9 +141,45 @@ func (p *Peer) ID() string {
 	return p.id
 }
 
+// NodeID retrieves the peer's unique identifier.
+func (p *Peer) NodeID() enode.ID {
+	return p.Peer.ID()
+}
+
 // Version retrieves the peer's negotiated `eth` protocol version.
 func (p *Peer) Version() uint {
 	return p.version
+}
+
+func (p *Peer) Lagging() bool {
+	return p.lagging
+}
+
+func (p *Peer) MarkLagging() {
+	p.lagging = true
+}
+
+// Head retrieves the current head hash and total difficulty of the peer.
+func (p *Peer) Head() (hash common.Hash, td *big.Int) {
+	p.lock.RLock()
+	defer p.lock.RUnlock()
+
+	copy(hash[:], p.head[:])
+	return hash, new(big.Int).Set(p.td)
+}
+
+// SetHead updates the head hash and total difficulty of the peer.
+func (p *Peer) SetHead(hash common.Hash, td *big.Int) {
+	p.lock.Lock()
+	defer p.lock.Unlock()
+	p.lagging = false
+	copy(p.head[:], hash[:])
+	p.td.Set(td)
+}
+
+// KnownBlock returns whether peer is known to already have a block.
+func (p *Peer) KnownBlock(hash common.Hash) bool {
+	return p.knownBlocks.Contains(hash)
 }
 
 // BlockRange returns the latest announced block range.
@@ -113,6 +191,62 @@ func (p *Peer) BlockRange() *BlockRangeUpdatePacket {
 // KnownTransaction returns whether peer is known to already have a transaction.
 func (p *Peer) KnownTransaction(hash common.Hash) bool {
 	return p.knownTxs.Contains(hash)
+}
+
+// markBlock marks a block as known for the peer, ensuring that the block will
+// never be propagated to this particular peer.
+func (p *Peer) markBlock(hash common.Hash) {
+	// If we reached the memory allowance, drop a previously known block hash
+	p.knownBlocks.Add(hash)
+}
+
+// SendNewBlockHashes announces the availability of a number of blocks through
+// a hash notification.
+func (p *Peer) SendNewBlockHashes(hashes []common.Hash, numbers []uint64) error {
+	// Mark all the block hashes as known, but ensure we don't overflow our limits
+	p.knownBlocks.Add(hashes...)
+
+	request := make(NewBlockHashesPacket, len(hashes))
+	for i := 0; i < len(hashes); i++ {
+		request[i].Hash = hashes[i]
+		request[i].Number = numbers[i]
+	}
+	return p2p.Send(p.rw, NewBlockHashesMsg, request)
+}
+
+// AsyncSendNewBlockHash queues the availability of a block for propagation to a
+// remote peer. If the peer's broadcast queue is full, the event is silently
+// dropped.
+func (p *Peer) AsyncSendNewBlockHash(block *types.Block) {
+	select {
+	case p.queuedBlockAnns <- block:
+		// Mark all the block hash as known, but ensure we don't overflow our limits
+		p.knownBlocks.Add(block.Hash())
+	default:
+		p.Log().Debug("Dropping block announcement", "number", block.NumberU64(), "hash", block.Hash())
+	}
+}
+
+// SendNewBlock propagates an entire block to a remote peer.
+func (p *Peer) SendNewBlock(block *types.Block, td *big.Int) error {
+	// Mark all the block hash as known, but ensure we don't overflow our limits
+	p.knownBlocks.Add(block.Hash())
+	return p2p.Send(p.rw, NewBlockMsg, &NewBlockPacket{
+		Block: block,
+		TD:    td,
+	})
+}
+
+// AsyncSendNewBlock queues an entire block for propagation to a remote peer. If
+// the peer's broadcast queue is full, the event is silently dropped.
+func (p *Peer) AsyncSendNewBlock(block *types.Block, td *big.Int) {
+	select {
+	case p.queuedBlocks <- &blockPropagation{block: block, td: td}:
+		// Mark all the block hash as known, but ensure we don't overflow our limits
+		p.knownBlocks.Add(block.Hash())
+	default:
+		p.Log().Debug("Dropping block propagation", "number", block.NumberU64(), "hash", block.Hash())
+	}
 }
 
 // markTransaction marks a transaction as known for the peer, ensuring that it

@@ -2459,7 +2459,7 @@ func MakeChain(ctx *cli.Context, stack *node.Node, readonly bool) (*core.BlockCh
 	}
 	options.VmConfig = vmcfg
 
-	chain, err := core.NewBlockChain(chainDb, gspec, engine, engine, options)
+	chain, err := core.NewBlockChain(chainDb, gspec, engine, engine, options, nil)
 	if err != nil {
 		Fatalf("Can't create BlockChain: %v", err)
 	}

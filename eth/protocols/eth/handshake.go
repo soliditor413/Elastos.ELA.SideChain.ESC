@@ -54,11 +54,13 @@ func (p *Peer) handshake68(networkID uint64, chain *core.BlockChain) error {
 		forkID     = forkid.NewID(chain.Config(), genesis, latest.Number.Uint64(), latest.Time)
 		forkFilter = forkid.NewFilter(chain)
 	)
+	td := chain.GetTd(latest.Hash(), latest.Number.Uint64())
 	errc := make(chan error, 2)
 	go func() {
 		pkt := &StatusPacket68{
 			ProtocolVersion: uint32(p.version),
 			NetworkID:       networkID,
+			TD:              td,
 			Head:            latest.Hash(),
 			Genesis:         genesis.Hash(),
 			ForkID:          forkID,
@@ -70,7 +72,18 @@ func (p *Peer) handshake68(networkID uint64, chain *core.BlockChain) error {
 		errc <- p.readStatus68(networkID, &status, genesis.Hash(), forkFilter)
 	}()
 
-	return waitForHandshake(errc, p)
+	err := waitForHandshake(errc, p)
+	if err != nil {
+		return err
+	}
+	p.td, p.head = status.TD, status.Head
+	// TD at mainnet block #7753254 is 76 bits. If it becomes 100 million times
+	// larger, it will still fit within 100 bits
+	if tdlen := p.td.BitLen(); tdlen > 100 {
+		return fmt.Errorf("too large total difficulty: bitlen %d", tdlen)
+	}
+
+	return nil
 }
 
 func (p *Peer) readStatus68(networkID uint64, status *StatusPacket68, genesis common.Hash, forkFilter forkid.Filter) error {

@@ -138,7 +138,6 @@ type handler struct {
 
 	// channels for fetcher, syncer, txsyncLoop
 	quitSync chan struct{}
-	stopCh   chan struct{}
 
 	chainSync *chainSyncer
 	wg        sync.WaitGroup
@@ -165,7 +164,6 @@ func newHandler(config *handlerConfig) (*handler, error) {
 		quitSync:       make(chan struct{}),
 		handlerDoneCh:  make(chan struct{}),
 		handlerStartCh: make(chan struct{}),
-		stopCh:         make(chan struct{}),
 	}
 	if config.Sync == ethconfig.FullSync {
 		// The database seems empty as the current block is the genesis. Yet the snap
@@ -300,7 +298,7 @@ func (h *handler) runEthPeer(peer *eth.Peer, handler eth.Handler) error {
 
 	// Execute the Ethereum handshake
 	if err := peer.Handshake(h.networkID, h.chain, h.blockRange.currentRange()); err != nil {
-		peer.Log().Debug("Ethereum handshake failed", "err", err)
+		peer.Log().Error("Ethereum handshake failed", "err", err)
 		return err
 	}
 	reject := false // reserved peer slots
@@ -320,7 +318,7 @@ func (h *handler) runEthPeer(peer *eth.Peer, handler eth.Handler) error {
 			return p2p.DiscTooManyPeers
 		}
 	}
-	peer.Log().Debug("Ethereum peer connected", "name", peer.Name())
+	peer.Log().Info("Ethereum peer connected", "name", peer.Name())
 
 	// Register the peer locally
 	if err := h.peers.registerPeer(peer, snap); err != nil {
@@ -344,6 +342,8 @@ func (h *handler) runEthPeer(peer *eth.Peer, handler eth.Handler) error {
 			return err
 		}
 	}
+	h.chainSync.handlePeerEvent()
+	
 	// Propagate existing transactions. new transactions appearing
 	// after this will be sent via broadcasts.
 	h.syncTransactions(peer)
@@ -494,10 +494,9 @@ func (h *handler) Start(maxPeers int) {
 func (h *handler) Stop() {
 	h.txsSub.Unsubscribe() // quits txBroadcastLoop
 	h.blockRange.stop()
-	h.txFetcher.Stop()
 	h.downloader.Terminate()
+	h.minedBlockSub.Unsubscribe()
 
-	close(h.stopCh)
 	// Quit chainSync and txsync64.
 	// After this is done, no new peers will be accepted.
 	close(h.quitSync)
@@ -594,18 +593,10 @@ func (h *handler) BroadcastTransactions(txs types.Transactions) {
 func (h *handler) minedBroadcastLoop() {
 	defer h.wg.Done()
 
-	for {
-		select {
-		case obj := <-h.minedBlockSub.Chan():
-			if obj == nil {
-				continue
-			}
-			if ev, ok := obj.Data.(core.NewMinedBlockEvent); ok {
-				h.BroadcastBlock(ev.Block, true)  // Propagate block to peers
-				h.BroadcastBlock(ev.Block, false) // Only then announce to the rest
-			}
-		case <-h.stopCh:
-			return
+	for obj := range h.minedBlockSub.Chan() {
+		if ev, ok := obj.Data.(core.NewMinedBlockEvent); ok {
+			h.BroadcastBlock(ev.Block, true)  // First propagate block to peers
+			h.BroadcastBlock(ev.Block, false) // Only then announce to the rest
 		}
 	}
 }
@@ -637,7 +628,7 @@ func (h *handler) BroadcastBlock(block *types.Block, propagate bool) {
 		for _, peer := range transfer {
 			peer.AsyncSendNewBlock(block, td)
 		}
-		log.Trace("Propagated block", "hash", hash, "recipients", len(transfer), "duration", common.PrettyDuration(time.Since(block.ReceivedAt)))
+		log.Info("Propagated block", "hash", hash, "recipients", len(transfer), "duration", common.PrettyDuration(time.Since(block.ReceivedAt)))
 		return
 	}
 	// Otherwise if the block is indeed in out own chain, announce it
@@ -645,7 +636,7 @@ func (h *handler) BroadcastBlock(block *types.Block, propagate bool) {
 		for _, peer := range peers {
 			peer.AsyncSendNewBlockHash(block)
 		}
-		log.Trace("Announced block", "hash", hash, "recipients", len(peers), "duration", common.PrettyDuration(time.Since(block.ReceivedAt)))
+		log.Info("Announced block", "hash", hash, "recipients", len(peers), "duration", common.PrettyDuration(time.Since(block.ReceivedAt)))
 	}
 }
 

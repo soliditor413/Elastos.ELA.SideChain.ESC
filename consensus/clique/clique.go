@@ -280,6 +280,9 @@ func (c *Clique) verifyHeader(chain consensus.ChainHeaderReader, header *types.H
 	}
 	// Ensure that the extra-data contains a signer list on checkpoint, but none otherwise
 	signersBytes := len(header.Extra) - extraVanity - extraSeal
+	if signersBytes%common.AddressLength == extraElaHeight {
+		signersBytes -= extraElaHeight
+	}
 	if !checkpoint && signersBytes != 0 {
 		return errExtraSigners
 	}
@@ -420,7 +423,6 @@ func (c *Clique) snapshot(chain consensus.ChainHeaderReader, number uint64, hash
 				for i := 0; i < len(signers); i++ {
 					copy(signers[i][:], checkpoint.Extra[extraVanity+i*common.AddressLength:])
 				}
-				fmt.Println("new snapshot >> ", "signers", signers, "len ", len(signers))
 				snap = newSnapshot(c.config, c.signatures, number, hash, signers)
 				if err := snap.store(c.db); err != nil {
 					return nil, err

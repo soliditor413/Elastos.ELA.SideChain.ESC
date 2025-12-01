@@ -367,7 +367,6 @@ func startNode(ctx *cli.Context, stack *node.Node, eth *eth.Ethereum, isConsole 
 	// Start up the node itself
 	utils.StartNode(ctx, stack, isConsole)
 	if ctx.IsSet(utils.UnlockedAccountFlag.Name) {
-		fmt.Println(">>>> unlockAccounts <<<<<<")
 		unlockAccounts(ctx, stack)
 	}
 
@@ -446,7 +445,6 @@ func startMiner(ctx *cli.Context, eth *eth.Ethereum) {
 		}
 
 		if eth.Engine() != eth.BlockChain().GetDposEngine() {
-			fmt.Println("start miner", "engine ", eth.Engine())
 			if err := eth.StartMining(); err != nil {
 				utils.Fatalf("Failed to start mining: %v", err)
 			}

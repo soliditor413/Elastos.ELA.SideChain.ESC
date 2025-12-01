@@ -106,6 +106,7 @@ func (cs *chainSyncer) loop() {
 		}
 		select {
 		case <-cs.peerEventCh:
+			log.Info("Peer information changed, recheck")
 			// Peer information changed, recheck.
 		case err := <-cs.doneCh:
 			cs.doneCh = nil
@@ -116,6 +117,7 @@ func (cs *chainSyncer) loop() {
 			cs.forced = true
 
 		case <-cs.handler.quitSync:
+			log.Info("Sync terminated quitSync")
 			// Disable all insertion on the blockchain. This needs to happen before
 			// terminating the downloader because the downloader waits for blockchain
 			// inserts, and these can take a long time to finish.
@@ -132,6 +134,7 @@ func (cs *chainSyncer) loop() {
 // nextSyncOp determines whether sync is required at this time.
 func (cs *chainSyncer) nextSyncOp() *chainSyncOp {
 	if cs.doneCh != nil {
+		log.Info("Sync already running")
 		return nil // Sync already running
 	}
 	// Ensure we're at minimum peer count.

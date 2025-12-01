@@ -19,7 +19,6 @@ package clique
 import (
 	"bytes"
 	"encoding/json"
-	"fmt"
 	"maps"
 	"slices"
 	"time"
@@ -305,7 +304,6 @@ func (s *Snapshot) signers() []common.Address {
 // inturn returns if a signer at a given block height is in-turn or not.
 func (s *Snapshot) inturn(number uint64, signer common.Address) bool {
 	signers, offset := s.signers(), 0
-	fmt.Println("signers ", signers, "len ", len(signers))
 	for offset < len(signers) && signers[offset] != signer {
 		offset++
 	}

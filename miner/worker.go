@@ -936,7 +936,6 @@ func (w *worker) newWorkLoop(recommit time.Duration) {
 	for {
 		select {
 		case <-w.startCh:
-			fmt.Println(" startCh--===>>>>>>>")
 			clearPending(w.chain.CurrentBlock().Number.Uint64())
 			timestamp = time.Now().Unix()
 			commit(commitInterruptNewHead)
@@ -960,7 +959,6 @@ func (w *worker) newWorkLoop(recommit time.Duration) {
 			if w.isRunning() && ((w.chainConfig.Clique != nil &&
 				w.chainConfig.Clique.Period > 0) || (w.chainConfig.Pbft != nil)) {
 				// Short circuit if no new transaction arrives.
-				fmt.Println("timer.c >>>>> commit")
 				commit(commitInterruptResubmit)
 			}
 

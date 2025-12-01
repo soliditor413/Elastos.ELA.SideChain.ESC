@@ -140,7 +140,7 @@ type ConsensusAPI struct {
 // The underlying blockchain needs to have a valid terminal total difficulty set.
 func NewConsensusAPI(eth *eth.Ethereum) *ConsensusAPI {
 	api := newConsensusAPIWithoutHeartbeat(eth)
-	go api.heartbeat()
+	//go api.heartbeat()
 	return api
 }
 

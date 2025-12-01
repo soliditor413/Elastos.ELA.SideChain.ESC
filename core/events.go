@@ -34,6 +34,10 @@ type ChainHeadEvent struct {
 	Header *types.Header
 }
 
+type ChainSideEvent struct {
+	Block *types.Block
+}
+
 // NewMinedBlockEvent is posted when a block has been imported.
 type NewMinedBlockEvent struct{ Block *types.Block }
 

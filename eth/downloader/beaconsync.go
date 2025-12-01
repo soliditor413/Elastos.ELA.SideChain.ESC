@@ -107,7 +107,8 @@ func (b *beaconBackfiller) resume() {
 		}()
 		// If the downloader fails, report an error as in beacon chain mode there
 		// should be no errors as long as the chain we're syncing to is valid.
-		if err := b.downloader.synchronise(mode, b.started); err != nil {
+		fmt.Println("start beacon synchronise ")
+		if err := b.downloader.synchronise("", common.Hash{}, nil, nil, mode, true, b.started); err != nil {
 			log.Error("Beacon backfilling failed", "err", err)
 			return
 		}
@@ -273,9 +274,49 @@ func (d *Downloader) findBeaconAncestor() (uint64, error) {
 	return start, nil
 }
 
+// fetchHead retrieves the head header and prior pivot block (if available) from
+// a remote peer.
+func (d *Downloader) fetchHead(p *peerConnection) (head *types.Header, pivot *types.Header, err error) {
+	p.log.Info("Retrieving remote chain head")
+	mode := d.getMode()
+
+	// Request the advertised remote head block and wait for the response
+	latest, _ := p.peer.Head()
+	fetch := 1
+	if mode == SnapSync {
+		fetch = 2 // head + pivot headers
+	}
+	headers, hashes, err := d.fetchHeadersByHash(p, latest, fetch, fsMinFullBlocks-1, true)
+	if err != nil {
+		return nil, nil, err
+	}
+	// Make sure the peer gave us at least one and at most the requested headers
+	if len(headers) == 0 || len(headers) > fetch {
+		return nil, nil, fmt.Errorf("%w: returned headers %d != requested %d", errBadPeer, len(headers), fetch)
+	}
+	// The first header needs to be the head, validate against the request. If
+	// only 1 header was returned, make sure there's no pivot or there was not
+	// one requested.
+	head = headers[0]
+	if len(headers) == 1 {
+		if mode == SnapSync && head.Number.Uint64() > uint64(fsMinFullBlocks) {
+			return nil, nil, fmt.Errorf("%w: no pivot included along head header", errBadPeer)
+		}
+		p.log.Debug("Remote head identified, no pivot", "number", head.Number, "hash", hashes[0])
+		return head, nil, nil
+	}
+	// At this point we have 2 headers in total and the first is the
+	// validated head of the chain. Check the pivot number and return,
+	pivot = headers[1]
+	if pivot.Number.Uint64() != head.Number.Uint64()-uint64(fsMinFullBlocks) {
+		return nil, nil, fmt.Errorf("%w: remote pivot %d != requested %d", errInvalidChain, pivot.Number, head.Number.Uint64()-uint64(fsMinFullBlocks))
+	}
+	return head, pivot, nil
+}
+
 // fetchHeaders feeds skeleton headers to the downloader queue for scheduling
 // until sync errors or is finished.
-func (d *Downloader) fetchHeaders(from uint64) error {
+func (d *Downloader) fetchBeaconHeaders(from uint64) error {
 	head, tail, _, err := d.skeleton.Bounds()
 	if err != nil {
 		return err

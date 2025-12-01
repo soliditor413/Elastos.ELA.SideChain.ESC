@@ -198,6 +198,7 @@ func (hc *HeaderChain) WriteHeaders(headers []*types.Header) (int, error) {
 	if len(headers) == 0 {
 		return 0, nil
 	}
+	fmt.Println(">>>>>> WriteHeaders>>>>>>")
 	if !hc.HasHeader(headers[0].ParentHash, headers[0].Number.Uint64()-1) {
 		return 0, consensus.ErrUnknownAncestor
 	}
@@ -206,6 +207,7 @@ func (hc *HeaderChain) WriteHeaders(headers []*types.Header) (int, error) {
 	if ptd == nil {
 		return 0, consensus.ErrUnknownAncestorTD
 	}
+	fmt.Println(">>>>>> WriteHeaders>>>>>>", " ptd ", ptd)
 	var (
 		newTD       = new(big.Int).Set(ptd) // Total difficulty of inserted chain
 		inserted    []rawdb.NumberHash      // Ephemeral lookup of number/hash for the chain
@@ -410,6 +412,7 @@ func (hc *HeaderChain) GetTd(hash common.Hash, number uint64) *big.Int {
 	}
 	td := rawdb.ReadTd(hc.chainDb, hash, number)
 	if td == nil {
+		fmt.Println("GetTd nilllllll >>>>> ", td)
 		return nil
 	}
 	// Cache the found body for next time and return

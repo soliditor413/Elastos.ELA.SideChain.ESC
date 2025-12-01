@@ -18,11 +18,13 @@
 package eth
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"github.com/elastos/Elastos.ELA.SideChain.ESC/spv"
+	"github.com/elastos/Elastos.ELA/core/types/payload"
 	"math"
 	"math/big"
 	"runtime"
@@ -284,7 +286,7 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 	}
 	options.Overrides = &overrides
 	pbftEngine := pbft.New(chainConfig, stack.DataDir())
-	eth.blockchain, err = core.NewBlockChain(chainDb, config.Genesis, eth.engine, pbftEngine, options)
+	eth.blockchain, err = core.NewBlockChain(chainDb, config.Genesis, eth.engine, pbftEngine, options, eth.shouldPreserve)
 	if err != nil {
 		return nil, err
 	}
@@ -463,6 +465,92 @@ func (s *Ethereum) Etherbase() (eb common.Address, err error) {
 		}
 	}
 	return common.Address{}, errors.New("etherbase must be explicitly specified")
+}
+
+// isLocalBlock checks whether the specified block is mined
+// by local miner accounts.
+//
+// We regard two types of accounts as local miner account: etherbase
+// and accounts specified via `txpool.locals` flag.
+func (s *Ethereum) isLocalBlock(header *types.Header) bool {
+	author, err := s.engine.Author(header)
+	if err != nil {
+		log.Warn("Failed to retrieve block author", "number", header.Number.Uint64(), "hash", header.Hash(), "err", err)
+		return false
+	}
+	// Check whether the given address is etherbase.
+	s.lock.RLock()
+	etherbase := s.etherbase
+	s.lock.RUnlock()
+	if author == etherbase {
+		return true
+	}
+	// Check whether the given address is specified by `txpool.local`
+	// CLI flag.
+	for _, account := range s.config.TxPool.Locals {
+		if account == author {
+			return true
+		}
+	}
+	return false
+}
+
+// shouldPreserve checks whether we should preserve the given block
+// during the chain reorg depending on whether the author of block
+// is a local account.
+func (s *Ethereum) shouldPreserve(header *types.Header) bool {
+	// The reason we need to disable the self-reorg preserving for clique
+	// is it can be probable to introduce a deadlock.
+	//
+	// e.g. If there are 7 available signers
+	//
+	// r1   A
+	// r2     B
+	// r3       C
+	// r4         D
+	// r5   A      [X] F G
+	// r6    [X]
+	//
+	// In the round5, the inturn signer E is offline, so the worst case
+	// is A, F and G sign the block of round5 and reject the block of opponents
+	// and in the round6, the last available signer B is offline, the whole
+	// network is stuck.
+	if _, ok := s.engine.(*clique.Clique); ok {
+		return false
+	}
+	if _, ok := s.engine.(*pbft.Pbft); ok {
+		if oldBlock := s.blockchain.GetBlockByNumber(header.Number.Uint64()); oldBlock != nil {
+			if oldBlock.Hash() == header.Hash() {
+				return false
+			}
+			log.Info("detected chain fork", "old block", oldBlock.Hash().String(), "new block", header.Hash().String(),
+				"oldBlock time", oldBlock.Time(), "newBlock time", header.Time)
+			var oldConfirm payload.Confirm
+			oldErr := oldConfirm.Deserialize(bytes.NewReader(oldBlock.Extra()))
+			if oldErr != nil {
+				log.Error("old Block is error confirm")
+			}
+			var newConfirm payload.Confirm
+			newErr := newConfirm.Deserialize(bytes.NewReader(header.Extra))
+			if newErr != nil {
+				log.Error("new Block is error confirm")
+				return false
+			}
+
+			oldNonce := oldBlock.Nonce()
+			newNonce := header.Nonce.Uint64()
+			log.Info("detected chain fork", "oldNonce", oldNonce, "newNonce", newNonce)
+			if oldNonce > 0 && newNonce > 0 && oldNonce != newNonce {
+				return newNonce > oldNonce
+			}
+
+			oldViewOffset := oldConfirm.Proposal.ViewOffset
+			newViewOffset := newConfirm.Proposal.ViewOffset
+			log.Info("detected chain fork", "oldViewOffset", oldViewOffset, "newViewOffset", newViewOffset)
+			//return newViewOffset > oldViewOffset
+		}
+	}
+	return s.isLocalBlock(header)
 }
 
 // SetEtherbase sets the mining reward address.

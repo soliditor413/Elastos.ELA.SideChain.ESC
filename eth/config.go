@@ -179,4 +179,6 @@ type Config struct {
 	ArbiterListContract  string
 	PledgedBillContract  string
 	DeveloperFeeContract []string
+
+	BlacklistContractAddr string
 }

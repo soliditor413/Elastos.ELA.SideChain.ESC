@@ -37,6 +37,7 @@ import (
 	"github.com/elastos/Elastos.ELA.SideChain.ESC/consensus/clique"
 	"github.com/elastos/Elastos.ELA.SideChain.ESC/consensus/ethash"
 	"github.com/elastos/Elastos.ELA.SideChain.ESC/consensus/pbft"
+	"github.com/elastos/Elastos.ELA.SideChain.ESC/contracts/blacklist"
 	"github.com/elastos/Elastos.ELA.SideChain.ESC/core"
 	"github.com/elastos/Elastos.ELA.SideChain.ESC/core/bloombits"
 	"github.com/elastos/Elastos.ELA.SideChain.ESC/core/events"
@@ -112,6 +113,14 @@ type Ethereum struct {
 	netRPCService *ethapi.PublicNetAPI
 
 	lock sync.RWMutex // Protects the variadic fields (e.g. gas price and etherbase)
+}
+
+type blacklistChecker struct {
+	oracle *blacklist.Oracle
+}
+
+func (c *blacklistChecker) IsBlacklisted(addr common.Address) (bool, error) {
+	return c.oracle.IsBlacklisted(&bind.CallOpts{}, addr)
 }
 
 func (s *Ethereum) SetEngine(engine consensus.Engine) {
@@ -200,6 +209,12 @@ func New(ctx *node.ServiceContext, config *Config, node *node.Node) (*Ethereum, 
 		config.PreConnectOffset = chainConfig.PreConnectOffset
 	} else {
 		chainConfig.PreConnectOffset = config.PreConnectOffset
+	}
+	fmt.Println("chainConfig.BlacklistContractAddr", chainConfig.BlacklistContractAddr)
+	if chainConfig.BlacklistContractAddr != "" {
+		config.BlacklistContractAddr = chainConfig.BlacklistContractAddr
+	} else {
+		chainConfig.BlacklistContractAddr = config.BlacklistContractAddr
 	}
 
 	if len(chainConfig.PbftKeyStorePassWord) > 0 {
@@ -309,6 +324,16 @@ func New(ctx *node.ServiceContext, config *Config, node *node.Node) (*Ethereum, 
 		gpoParams.Default = config.Miner.GasPrice
 	}
 	eth.APIBackend.gpo = gasprice.NewOracle(eth.APIBackend, gpoParams)
+
+	if config.BlacklistContractAddr != "" {
+		addr := common.HexToAddress(config.BlacklistContractAddr)
+		oracle, err := blacklist.NewOracleCaller(addr, eth.APIBackend)
+		if err != nil {
+			log.Warn("Failed to init blacklist oracle", "addr", addr, "err", err)
+		} else {
+			eth.txPool.SetBlacklistChecker(&blacklistChecker{oracle: oracle})
+		}
+	}
 
 	SubscriptEvent(eth, engine)
 

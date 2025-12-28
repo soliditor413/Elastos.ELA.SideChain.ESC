@@ -49,6 +49,7 @@ func (c Config) MarshalTOML() (interface{}, error) {
 		RPCGasCap               *big.Int                       `toml:",omitempty"`
 		Checkpoint              *params.TrustedCheckpoint      `toml:",omitempty"`
 		CheckpointOracle        *params.CheckpointOracleConfig `toml:",omitempty"`
+		BlacklistContractAddr   string
 	}
 	var enc Config
 	enc.Genesis = c.Genesis
@@ -82,6 +83,7 @@ func (c Config) MarshalTOML() (interface{}, error) {
 	enc.RPCGasCap = c.RPCGasCap
 	enc.Checkpoint = c.Checkpoint
 	enc.CheckpointOracle = c.CheckpointOracle
+	enc.BlacklistContractAddr = c.BlacklistContractAddr
 	return &enc, nil
 }
 
@@ -119,6 +121,7 @@ func (c *Config) UnmarshalTOML(unmarshal func(interface{}) error) error {
 		RPCGasCap               *big.Int                       `toml:",omitempty"`
 		Checkpoint              *params.TrustedCheckpoint      `toml:",omitempty"`
 		CheckpointOracle        *params.CheckpointOracleConfig `toml:",omitempty"`
+		BlacklistContractAddr   *string
 	}
 	var dec Config
 	if err := unmarshal(&dec); err != nil {
@@ -216,6 +219,9 @@ func (c *Config) UnmarshalTOML(unmarshal func(interface{}) error) error {
 	}
 	if dec.CheckpointOracle != nil {
 		c.CheckpointOracle = dec.CheckpointOracle
+	}
+	if dec.BlacklistContractAddr != nil {
+		c.BlacklistContractAddr = *dec.BlacklistContractAddr
 	}
 	return nil
 }

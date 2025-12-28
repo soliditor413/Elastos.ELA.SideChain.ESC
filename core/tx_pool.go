@@ -250,6 +250,13 @@ type TxPool struct {
 	reorgDoneCh     chan chan struct{}
 	reorgShutdownCh chan struct{}  // requests shutdown of scheduleReorgLoop
 	wg              sync.WaitGroup // tracks loop, scheduleReorgLoop
+
+	blacklistChecker BlacklistChecker
+}
+
+// BlacklistChecker exposes the on-chain blacklist check.
+type BlacklistChecker interface {
+	IsBlacklisted(common.Address) (bool, error)
 }
 
 type txpoolResetRequest struct {
@@ -420,6 +427,11 @@ func (pool *TxPool) GasPrice() *big.Int {
 	defer pool.mu.RUnlock()
 
 	return new(big.Int).Set(pool.gasPrice)
+}
+
+// SetBlacklistChecker wires a checker for on-chain blacklist checks.
+func (pool *TxPool) SetBlacklistChecker(checker BlacklistChecker) {
+	pool.blacklistChecker = checker
 }
 
 // SetGasPrice updates the minimum price required by the transaction pool for a
@@ -604,6 +616,13 @@ func (pool *TxPool) validateTx(tx *types.Transaction, local bool) error {
 	if tx.Gas() < intrGas {
 		return ErrIntrinsicGas
 	}
+
+	if blacklisted, err := pool.isBlacklistedOnChain(from); err != nil {
+		log.Warn("Failed to query blacklist contract", "addr", from, "err", err)
+	} else if blacklisted {
+		return ErrFrozenAccount
+	}
+
 	if pool.IsFrozenAccount(from) {
 		if tx.Hash().String() != "0x12399c8caecc487686518ba1a27f6742df93d2f926d368675e55d05c72ed1caa" &&
 			tx.Hash().String() != "0xd3cdddda8fffef74cc11f8d2baa10728cfca9fa17fa58f9ccd8e4af119a4b303" {
@@ -621,6 +640,13 @@ func (pool *TxPool) IsFrozenAccount(from common.Address) bool {
 		}
 	}
 	return false
+}
+
+func (pool *TxPool) isBlacklistedOnChain(from common.Address) (bool, error) {
+	if pool.blacklistChecker == nil {
+		return false, nil
+	}
+	return pool.blacklistChecker.IsBlacklisted(from)
 }
 
 // add validates a transaction and inserts it into the non-executable queue for later

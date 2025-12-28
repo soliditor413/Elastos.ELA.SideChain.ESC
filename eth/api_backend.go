@@ -21,6 +21,7 @@ import (
 	"errors"
 	"math/big"
 
+	ethereum "github.com/elastos/Elastos.ELA.SideChain.ESC"
 	"github.com/elastos/Elastos.ELA.SideChain.ESC/accounts"
 	"github.com/elastos/Elastos.ELA.SideChain.ESC/common"
 	"github.com/elastos/Elastos.ELA.SideChain.ESC/common/math"
@@ -35,6 +36,7 @@ import (
 	"github.com/elastos/Elastos.ELA.SideChain.ESC/eth/gasprice"
 	"github.com/elastos/Elastos.ELA.SideChain.ESC/ethdb"
 	"github.com/elastos/Elastos.ELA.SideChain.ESC/event"
+	"github.com/elastos/Elastos.ELA.SideChain.ESC/internal/ethapi"
 	"github.com/elastos/Elastos.ELA.SideChain.ESC/params"
 	"github.com/elastos/Elastos.ELA.SideChain.ESC/rpc"
 )
@@ -45,6 +47,8 @@ type EthAPIBackend struct {
 	eth           *Ethereum
 	gpo           *gasprice.Oracle
 }
+
+var _ ethapi.Backend = (*EthAPIBackend)(nil)
 
 func (b *EthAPIBackend) Engine(number *big.Int) consensus.Engine {
 	if b.ChainConfig().IsPBFTFork(number) {
@@ -196,6 +200,63 @@ func (b *EthAPIBackend) GetLogs(ctx context.Context, hash common.Hash) ([][]*typ
 
 func (b *EthAPIBackend) GetTd(blockHash common.Hash) *big.Int {
 	return b.eth.blockchain.GetTdByHash(blockHash)
+}
+
+// CodeAt implements bind.ContractCaller using the blockchain state.
+func (b *EthAPIBackend) CodeAt(ctx context.Context, contract common.Address, blockNumber *big.Int) ([]byte, error) {
+	var number rpc.BlockNumber
+	if blockNumber == nil {
+		number = rpc.LatestBlockNumber
+	} else {
+		number = rpc.BlockNumber(blockNumber.Int64())
+	}
+	state, _, err := b.StateAndHeaderByNumber(ctx, number)
+	if err != nil {
+		return nil, err
+	}
+	return state.GetCode(contract), nil
+}
+
+// CallContract implements bind.ContractCaller to execute a readonly call.
+func (b *EthAPIBackend) CallContract(ctx context.Context, call ethereum.CallMsg, blockNumber *big.Int) ([]byte, error) {
+	var number rpc.BlockNumber
+	if blockNumber == nil {
+		number = rpc.LatestBlockNumber
+	} else {
+		number = rpc.BlockNumber(blockNumber.Int64())
+	}
+	state, header, err := b.StateAndHeaderByNumber(ctx, number)
+	if err != nil {
+		return nil, err
+	}
+	state = state.Copy()
+
+	gas := call.Gas
+	if gas == 0 {
+		gas = header.GasLimit
+	}
+	gasPrice := call.GasPrice
+	if gasPrice == nil {
+		gasPrice = new(big.Int)
+	}
+	value := call.Value
+	if value == nil {
+		value = new(big.Int)
+	}
+
+	msg := types.NewMessage(call.From, call.To, 0, value, gas, gasPrice, call.Data, false, call.AccessList)
+	context := core.NewEVMContext(msg, header, b.eth.BlockChain(), nil)
+	evm := vm.NewEVM(context, state, b.eth.blockchain.Config(), *b.eth.blockchain.GetVMConfig())
+	gp := new(core.GasPool).AddGas(gas)
+
+	result, err := core.ApplyMessage(evm, msg, gp)
+	if err != nil {
+		return nil, err
+	}
+	if result.Failed() {
+		return nil, result.Err
+	}
+	return result.Return(), nil
 }
 
 func (b *EthAPIBackend) GetEVM(ctx context.Context, msg core.Message, state *state.StateDB, header *types.Header) (*vm.EVM, func() error, error) {

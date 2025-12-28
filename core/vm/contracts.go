@@ -143,6 +143,7 @@ var PrecompiledContractsBerlin = map[common.Address]PrecompiledContract{
 	// common.BytesToAddress(params.PledgeBillTokenVersion.Bytes()): &pledgeBillPayloadVersion{},
 	common.BytesToAddress(params.GetMainChainBlockByHeight.Bytes()): &getMainChainBlockByHeight{},
 	common.BytesToAddress(params.GetMainChainLatestHeight.Bytes()):  &getMainChainLatestHeight{},
+	common.BytesToAddress(params.P256VerifyDigest.Bytes()):          &p256VerifyDigest{},
 }
 
 var PrecompiledContractsShangHai = map[common.Address]PrecompiledContract{
@@ -164,6 +165,7 @@ var PrecompiledContractsShangHai = map[common.Address]PrecompiledContract{
 	common.BytesToAddress(params.PledgeBillTokenVersion.Bytes()):    &pledgeBillPayloadVersion{},
 	common.BytesToAddress(params.GetMainChainBlockByHeight.Bytes()): &getMainChainBlockByHeight{},
 	common.BytesToAddress(params.GetMainChainLatestHeight.Bytes()):  &getMainChainLatestHeight{},
+	common.BytesToAddress(params.P256VerifyDigest.Bytes()):          &p256VerifyDigest{},
 }
 
 var (
@@ -768,6 +770,28 @@ func (b *pbkVerifySignature) Run(input []byte) ([]byte, error) {
 		return true32Byte, nil
 	}
 	return false32Byte, nil
+}
+
+type p256VerifyDigest struct{}
+
+func (b *p256VerifyDigest) RequiredGas(input []byte) uint64 {
+	return params.PbkVerifySignature
+}
+
+func (b *p256VerifyDigest) Run(input []byte) ([]byte, error) {
+	//length := getData(input, 0, 32)
+	pubkey := getData(input, 0, 33)
+	digest := getData(input, 33, 32)
+	sig := getData(input, 65, 64)
+	publicKey, err := elaCrypto.DecodePoint(pubkey)
+	if err != nil {
+		return false32Byte, errP256VerifyInvalidPublicKey
+	}
+	err = elaCrypto.VerifyDigest(*publicKey, digest, sig)
+	if err != nil {
+		return false32Byte, nil
+	}
+	return true32Byte, nil
 }
 
 type pledgeBillVerify struct{}

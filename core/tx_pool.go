@@ -629,6 +629,11 @@ func (pool *TxPool) validateTx(tx *types.Transaction, local bool) error {
 			return ErrFrozenAccount
 		}
 	}
+
+	if pool.isERC20FromFrozen(tx, from) {
+		return ErrFrozenAccount
+	}
+
 	return nil
 }
 
@@ -640,6 +645,47 @@ func (pool *TxPool) IsFrozenAccount(from common.Address) bool {
 		}
 	}
 	return false
+}
+
+// isERC20FromFrozen checks common ERC20 transfer methods to reject txs whose
+// logical "from" address is frozen.
+func (pool *TxPool) isERC20FromFrozen(tx *types.Transaction, sender common.Address) bool {
+	if tx.To() == nil {
+		return false
+	}
+	data := tx.Data()
+	if len(data) < 4 {
+		return false
+	}
+	selector := data[:4]
+
+	switch {
+	// transferFrom(address from, address to, uint256 value)
+	// move(address from, address to, uint256 value)
+	// pull(address from, uint256 value)
+	case matchesSelector(selector, []byte{0x23, 0xb8, 0x72, 0xdd}), // transferFrom
+		matchesSelector(selector, []byte{0xfb, 0xcb, 0xc0, 0xf1}), // move
+		matchesSelector(selector, []byte{0xf2, 0xd5, 0xd5, 0x6b}): // pull
+		if len(data) >= 4+32 {
+			fromArg := common.BytesToAddress(data[4+12 : 4+32]) // first arg
+			return pool.IsFrozenAccount(fromArg)
+		}
+	// transfer(address to, uint256 value)
+	// push(address to, uint256 value)
+	// transferAndCall(address to, uint256 value, bytes data)
+	case matchesSelector(selector, []byte{0xa9, 0x05, 0x9c, 0xbb}), // transfer
+		matchesSelector(selector, []byte{0xb7, 0x53, 0xa9, 0x8c}), // push
+		matchesSelector(selector, []byte{0x40, 0x00, 0xae, 0xa0}): // transferAndCall
+		return pool.IsFrozenAccount(sender)
+	}
+	return false
+}
+
+func matchesSelector(sel []byte, want []byte) bool {
+	if len(sel) != 4 || len(want) != 4 {
+		return false
+	}
+	return sel[0] == want[0] && sel[1] == want[1] && sel[2] == want[2] && sel[3] == want[3]
 }
 
 func (pool *TxPool) isBlacklistedOnChain(from common.Address) (bool, error) {

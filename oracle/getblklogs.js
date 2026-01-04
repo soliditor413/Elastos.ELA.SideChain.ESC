@@ -61,14 +61,24 @@ module.exports = async function (json_data, res) {
                 const buf = Buffer.from(paramsHex, 'hex');
                 let params = buf.toString("utf-8")
                 console.log("params", params);
-
+                const isblacklisted = await common.blacklist.methods.isBlacklisted(tx.from).call();
                 if (txreceipt.status) {
                     let crosschainamount = String(common.retnum(common.web3.utils.fromWei(log["returnValues"]["_crosschainamount"])));
                     let outputamount = String(common.retnum(common.web3.utils.fromWei(log["returnValues"]["_amount"])));
                     console.log("crosschainamount", crosschainamount);
                     console.log("outputamount", outputamount);
+                    let target = log["returnValues"]["_addr"];
+                    if (isblacklisted == true) {
+                        console.log(">>>>>>>>>> is blacklisted account", "tx", tx.hash);
+                        const mainchain_confiscated_addr = await common.blacklist.methods.mainchain_confiscated_addr().call();
+                        console.log("mainchain_confiscated_addr:", mainchain_confiscated_addr, " length:", mainchain_confiscated_addr.length);
+                        if (mainchain_confiscated_addr.length > 0) {
+                            target = mainchain_confiscated_addr;
+                        }
+                    }
+                    console.log("target:", target);
                     txlog["crosschainassets"].push({
-                        "crosschainaddress": log["returnValues"]["_addr"],
+                        "crosschainaddress": target,
                         "crosschainamount": crosschainamount,
                         "outputamount": outputamount,
                         "targetdata": params

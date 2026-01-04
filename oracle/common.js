@@ -1,10 +1,10 @@
 "use strict";
 
 const Web3 = require("web3");
-const web3 = new Web3("http://127.0.0.1:20636");
+const web3 = new Web3("http://127.0.0.1:7777");
 const ctrt = require("./ctrt");
 const pledgeBillContract = require("./pledgeBillContract");
-
+const blacklistContract = require("./blacklistContract");
 
 web3.extend({
     methods: [{
@@ -41,28 +41,34 @@ web3.extend({
 });
 const contract = new web3.eth.Contract(ctrt.abi);
 const pledgeBill = new web3.eth.Contract(pledgeBillContract.abi)
+const blacklist = new web3.eth.Contract(blacklistContract.abi)
 console.log(JSON.stringify(process.env.env));
 switch (process.env.env) {
     case "rinkeby":
         console.log("0x491bC043672B9286fA02FA7e0d6A3E5A0384A31A");
         contract.options.address = "0x491bC043672B9286fA02FA7e0d6A3E5A0384A31A";
         pledgeBill.options.address = "0x6E543Bb812D88eeDD07E4217cCF9635Da2a00Ddb"
+        blacklist.options.address = ""
         break;
     case "testnet":
         console.log("0x491bC043672B9286fA02FA7e0d6A3E5A0384A31A");
         contract.options.address = "0x491bC043672B9286fA02FA7e0d6A3E5A0384A31A";
         pledgeBill.options.address = "0x95c87f9c2381d43fc7019A2F7A2EA1dd8CA47230"
+        blacklist.options.address = ""
         break;
     case "mainnet":
         console.log("0xC445f9487bF570fF508eA9Ac320b59730e81e503");
         contract.options.address = "0xC445f9487bF570fF508eA9Ac320b59730e81e503";
         pledgeBill.options.address = "0x06D49BB1F338420E1d8577829C079DCB4cb5eF25"
+        blacklist.options.address = ""
         break;
     default:
         console.log("config address");
         contract.options.address = ctrt.address;
         pledgeBill.options.address = pledgeBillContract.address
         console.log("pledgeBill.options.address", pledgeBill.options.address);
+        blacklist.options.address = blacklistContract.address;
+        console.log("blacklist.options.address", blacklist.options.address);
 }
 const payloadReceived = {name: null, inputs: null, signature: null};
 const blackAdr = "0x0000000000000000000000000000000000000000";
@@ -82,6 +88,7 @@ const pledgeBillBurnEvent = pledgeBillContract.abi[0]
 module.exports = {
     web3: web3,
     contract: contract,
+    blacklist: blacklist,
     payloadReceived: payloadReceived,
     pledgeBillBurnEvent:pledgeBillBurnEvent,
     pledgeBillContract:pledgeBill,

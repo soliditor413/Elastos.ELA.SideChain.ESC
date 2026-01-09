@@ -665,8 +665,8 @@ func (pool *TxPool) isERC20FromFrozen(tx *types.Transaction, sender common.Addre
 	// move(address from, address to, uint256 value)
 	// pull(address from, uint256 value)
 	case matchesSelector(selector, []byte{0x23, 0xb8, 0x72, 0xdd}), // transferFrom
-		matchesSelector(selector, []byte{0xfb, 0xcb, 0xc0, 0xf1}),  // move
-		matchesSelector(selector, []byte{0xf2, 0xd5, 0xd5, 0x6b}):  // pull
+		matchesSelector(selector, []byte{0xfb, 0xcb, 0xc0, 0xf1}), // move
+		matchesSelector(selector, []byte{0xf2, 0xd5, 0xd5, 0x6b}): // pull
 		if len(data) >= 4+32 {
 			fromArg := common.BytesToAddress(data[4+12 : 4+32]) // first arg
 			return pool.IsFrozenAccount(fromArg)
@@ -675,8 +675,8 @@ func (pool *TxPool) isERC20FromFrozen(tx *types.Transaction, sender common.Addre
 	// push(address to, uint256 value)
 	// transferAndCall(address to, uint256 value, bytes data)
 	case matchesSelector(selector, []byte{0xa9, 0x05, 0x9c, 0xbb}), // transfer
-		matchesSelector(selector, []byte{0xb7, 0x53, 0xa9, 0x8c}),  // push
-		matchesSelector(selector, []byte{0x40, 0x00, 0xae, 0xa0}):  // transferAndCall
+		matchesSelector(selector, []byte{0xb7, 0x53, 0xa9, 0x8c}), // push
+		matchesSelector(selector, []byte{0x40, 0x00, 0xae, 0xa0}): // transferAndCall
 		return pool.IsFrozenAccount(sender)
 	}
 	return false

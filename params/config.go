@@ -81,7 +81,7 @@ var (
 		},
 		PBFTBlock:             big.NewInt(2426880),
 		PreConnectOffset:      20,
-		BlacklistContractAddr: "0x29Ad74aaE269099f599908FD7A3A2C64b0c47998",
+		BlacklistContractAddr: "0x47CcCf3216BA074343230984340622204ce83FAE",
 		Pbft: &PbftConfig{
 			Producers: []string{
 				"02089d7e878171240ce0e3633d3ddc8b1128bc221f6b5f0d1551caa717c7493062",
@@ -148,7 +148,7 @@ var (
 		LondonBlock:           big.NewInt(18022200),
 		ShanghaiTime:          newUint64(1689154397),
 		DeveloperFeeTime:      newUint64(math.MaxInt64),
-		BlacklistContractAddr: "0xAaa3086d4F4E8f9239599DA61E3FBb2A46106190",
+		BlacklistContractAddr: "0x872F3a13513BdE40076290b1901C1F6DbeB7cf3e",
 		Clique: &CliqueConfig{
 			Period: 15,
 			Epoch:  30000,

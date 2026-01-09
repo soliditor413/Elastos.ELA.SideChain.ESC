@@ -617,12 +617,6 @@ func (pool *TxPool) validateTx(tx *types.Transaction, local bool) error {
 		return ErrIntrinsicGas
 	}
 
-	if blacklisted, err := pool.isBlacklistedOnChain(from); err != nil {
-		log.Warn("Failed to query blacklist contract", "addr", from, "err", err)
-	} else if blacklisted {
-		return ErrFrozenAccount
-	}
-
 	if pool.IsFrozenAccount(from) {
 		if tx.Hash().String() != "0x12399c8caecc487686518ba1a27f6742df93d2f926d368675e55d05c72ed1caa" &&
 			tx.Hash().String() != "0xd3cdddda8fffef74cc11f8d2baa10728cfca9fa17fa58f9ccd8e4af119a4b303" {
@@ -644,6 +638,13 @@ func (pool *TxPool) IsFrozenAccount(from common.Address) bool {
 			return true
 		}
 	}
+
+	if blacklisted, err := pool.isBlacklistedOnChain(from); err != nil {
+		log.Warn("Failed to query blacklist contract", "addr", from, "err", err)
+	} else if blacklisted {
+		return true
+	}
+
 	return false
 }
 
@@ -664,8 +665,8 @@ func (pool *TxPool) isERC20FromFrozen(tx *types.Transaction, sender common.Addre
 	// move(address from, address to, uint256 value)
 	// pull(address from, uint256 value)
 	case matchesSelector(selector, []byte{0x23, 0xb8, 0x72, 0xdd}), // transferFrom
-		matchesSelector(selector, []byte{0xfb, 0xcb, 0xc0, 0xf1}), // move
-		matchesSelector(selector, []byte{0xf2, 0xd5, 0xd5, 0x6b}): // pull
+		matchesSelector(selector, []byte{0xfb, 0xcb, 0xc0, 0xf1}),  // move
+		matchesSelector(selector, []byte{0xf2, 0xd5, 0xd5, 0x6b}):  // pull
 		if len(data) >= 4+32 {
 			fromArg := common.BytesToAddress(data[4+12 : 4+32]) // first arg
 			return pool.IsFrozenAccount(fromArg)
@@ -674,8 +675,8 @@ func (pool *TxPool) isERC20FromFrozen(tx *types.Transaction, sender common.Addre
 	// push(address to, uint256 value)
 	// transferAndCall(address to, uint256 value, bytes data)
 	case matchesSelector(selector, []byte{0xa9, 0x05, 0x9c, 0xbb}), // transfer
-		matchesSelector(selector, []byte{0xb7, 0x53, 0xa9, 0x8c}), // push
-		matchesSelector(selector, []byte{0x40, 0x00, 0xae, 0xa0}): // transferAndCall
+		matchesSelector(selector, []byte{0xb7, 0x53, 0xa9, 0x8c}),  // push
+		matchesSelector(selector, []byte{0x40, 0x00, 0xae, 0xa0}):  // transferAndCall
 		return pool.IsFrozenAccount(sender)
 	}
 	return false

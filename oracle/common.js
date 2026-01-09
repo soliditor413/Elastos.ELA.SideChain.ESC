@@ -54,13 +54,13 @@ switch (process.env.env) {
         console.log("0x491bC043672B9286fA02FA7e0d6A3E5A0384A31A");
         contract.options.address = "0x491bC043672B9286fA02FA7e0d6A3E5A0384A31A";
         pledgeBill.options.address = "0x95c87f9c2381d43fc7019A2F7A2EA1dd8CA47230"
-        blacklist.options.address = ""
+        blacklist.options.address = "0x872F3a13513BdE40076290b1901C1F6DbeB7cf3e"
         break;
     case "mainnet":
         console.log("0xC445f9487bF570fF508eA9Ac320b59730e81e503");
         contract.options.address = "0xC445f9487bF570fF508eA9Ac320b59730e81e503";
         pledgeBill.options.address = "0x06D49BB1F338420E1d8577829C079DCB4cb5eF25"
-        blacklist.options.address = ""
+        blacklist.options.address = "0x47CcCf3216BA074343230984340622204ce83FAE"
         break;
     default:
         console.log("config address");

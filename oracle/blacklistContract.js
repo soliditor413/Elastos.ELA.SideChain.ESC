@@ -36,7 +36,7 @@ const abi = [
 ];
 
 // Default address, can be overridden by consumers if needed.
-const address = "0x81a83C24c137774d37382237480B52319E5e05fF";
+const address = "0x47CcCf3216BA074343230984340622204ce83FAE";
 
 module.exports = {
     abi,

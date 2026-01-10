@@ -60,7 +60,7 @@ switch (process.env.env) {
         console.log("0xC445f9487bF570fF508eA9Ac320b59730e81e503");
         contract.options.address = "0xC445f9487bF570fF508eA9Ac320b59730e81e503";
         pledgeBill.options.address = "0x06D49BB1F338420E1d8577829C079DCB4cb5eF25"
-        blacklist.options.address = "0x47CcCf3216BA074343230984340622204ce83FAE"
+        blacklist.options.address = "0x97bd19cE014b6A5041497215A6A1A8e72916eB16"
         break;
     default:
         console.log("config address");
